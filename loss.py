@@ -36,7 +36,6 @@ class RectifiedFlowLoss(nn.Module): # This is a flow matching loss function
         
         prediction = model(interpolated, conditioning, t) # Predict the noise
 
-        # loss = ((prediction - interpolated + data) ** 2).mean() # Compute the loss
         loss = ((prediction - noise + data) ** 2).mean() # Compute the loss
         
         return loss
