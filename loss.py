@@ -10,7 +10,7 @@ class RectifiedFlowLoss(nn.Module): # This is a flow matching loss function
         super().__init__()
         self.mse = nn.MSELoss()
     
-    def forward(self, model, data, conditioning):
+    def forward(self, model, data, conditioning=None):
         """
         Computes the rectified flow diffusion loss.
         

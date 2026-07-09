@@ -29,7 +29,7 @@ def load_model(model, path='model.pth', device='cpu'):
     model.load_state_dict(torch.load(path, map_location=device))
     return model
 
-def estimate_flops(model, data, conditioning, device=None):
+def estimate_flops(model, data, conditioning=None, device=None):
     """
     Estimate FLOPs per batch for the model.
     This is a simple estimation using PyTorch's FlopCounterMode.
@@ -49,10 +49,11 @@ def estimate_flops(model, data, conditioning, device=None):
         # Move model inputs to the specified device if provided
         if device is not None:
             data = data.to(device)
-            conditioning = conditioning.to(device)
+            if conditioning is not None:
+                conditioning = conditioning.to(device)
         
         # Create input tensor for model
-        model_input = (data, conditioning, torch.randn(data.shape[0], 1, device=device))
+        model_input = (data, conditioning, torch.randn(data.shape[0], device=data.device))
         
         # Use FlopCounterMode as a context manager
         with FlopCounterMode(model) as flop_counter:

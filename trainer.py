@@ -20,20 +20,23 @@ class Trainer:
     criterion: nn.Module
     device: torch.device
     callbacks: List[Callable] = field(default_factory=list)
-    log_interval: int = 1000
+    log_interval: int = 100_000
     profile_memory: bool = True
     ema: Optional[EMA] = None  # EMA instance, if None no EMA updates will be done
     peak_flops: float = 91.1e12  # RTX 6000 ADA peak FLOPS (91.1 TFLOPS)
     flops_per_batch: Optional[float] = None  # Will be computed when needed
+    max_steps: Optional[int] = None
     
     @torch.compile
-    def train_step(self, data: torch.Tensor, conditioning: torch.Tensor):
+    def train_step(self, data: torch.Tensor, conditioning: Optional[torch.Tensor] = None):
         """
         Perform a training step on a batch of data.
         """
         self.optimizer.zero_grad()
         
-        data, conditioning = data.to(self.device), conditioning.to(self.device)
+        data = data.to(self.device)
+        if conditioning is not None:
+            conditioning = conditioning.to(self.device)
         loss = self.criterion(self.model, data, conditioning)
         
         loss.backward()
@@ -49,6 +52,15 @@ class Trainer:
             self.last_memory_stats = get_memory_usage(self.device)
         
         return loss.item()
+
+    @staticmethod
+    def _unpack_batch(batch):
+        if isinstance(batch, (tuple, list)):
+            data = batch[0]
+            conditioning = batch[1] if len(batch) > 1 else None
+            return data, conditioning
+
+        return batch, None
     
     def __call__(self):
         """
@@ -67,23 +79,23 @@ class Trainer:
         
         # Estimate FLOPs on first batch
         try:
-            first_batch = next(iter(self.dataloader))
-            self.flops_per_batch = estimate_flops(self.model, *first_batch, device=self.device)
+            data, conditioning = self._unpack_batch(next(iter(self.dataloader)))
+            self.flops_per_batch = estimate_flops(self.model, data, conditioning, device=self.device)
         except Exception as e:
             print(f"Failed to estimate FLOPs: {e}")
             self.flops_per_batch = 0
         
-        while True:
+        while self.max_steps is None or step < self.max_steps:
             # Run callbacks
             for callback in self.callbacks:
                 callback(step, self.val_dataloader)
             
             # Get data batch
             try:
-                data, conditioning = next(data_iter)
+                data, conditioning = self._unpack_batch(next(data_iter))
             except StopIteration:
                 data_iter = iter(self.dataloader)
-                data, conditioning = next(data_iter)
+                data, conditioning = self._unpack_batch(next(data_iter))
             
             # Perform training step
             loss = self.train_step(data, conditioning)

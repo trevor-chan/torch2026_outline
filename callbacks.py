@@ -6,6 +6,15 @@ from torch.utils.data import DataLoader
 from image_utils import reconstruct_image, denormalize_image, one_hot_encode, save_image_batch
 import os
 
+
+def unpack_batch(batch):
+    if isinstance(batch, (tuple, list)):
+        data = batch[0]
+        conditioning = batch[1] if len(batch) > 1 else None
+        return data, conditioning
+
+    return batch, None
+
 @dataclass
 class ValidationCallback:
     """
@@ -48,14 +57,16 @@ class ValidationCallback:
         with torch.no_grad():
             for i in range(self.num_iterations):
                 try:
-                    data, conditioning = next(data_iter)
+                    data, conditioning = unpack_batch(next(data_iter))
                 except StopIteration:
                     # Restart iterator if we run out of data
                     data_iter = iter(dataloader)
-                    data, conditioning = next(data_iter)
+                    data, conditioning = unpack_batch(next(data_iter))
                                         
                 # Move data to device
-                data, conditioning = data.to(self.device), conditioning.to(self.device)
+                data = data.to(self.device)
+                if conditioning is not None:
+                    conditioning = conditioning.to(self.device)
                 
                 # Compute loss
                 loss = self.criterion(self.model, data, conditioning)
@@ -107,14 +118,14 @@ class RectifiedFlowSampler:
             return None
         
         # get a batch of samples from the dataloader
-        data, conditioning = next(iter(dataloader))
-        # make random data of the same shape as the samples
+        data, conditioning = unpack_batch(next(iter(dataloader)))
+        data = data.to(self.device)
         batch_size = data.shape[0]
-        x_t = torch.randn(batch_size, data.shape[1], device=self.device)
+        x_t = torch.randn_like(data)
         
         # If no labels provided, use the targets from the batch
         if labels is None:
-            labels = conditioning.to(self.device)
+            labels = conditioning.to(self.device) if conditioning is not None else None
         
         # use a linear time schedule for sampling
         time_steps = torch.linspace(1.0, 0.0, self.num_steps + 1, device=self.device)
@@ -132,8 +143,7 @@ class RectifiedFlowSampler:
                 # Update sample
                 x_t += (t_next - t_curr) * v
         
-        # Convert back to image format and denormalize
-        images = denormalize_image(reconstruct_image(x_t))
+        images = self._samples_to_images(x_t)
         
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
@@ -149,6 +159,13 @@ class RectifiedFlowSampler:
         )
         
         print(f"Generated images saved to {output_path}")
+
+    @staticmethod
+    def _samples_to_images(samples: torch.Tensor) -> torch.Tensor:
+        if samples.dim() == 4:
+            return samples.clamp(0.0, 1.0)
+
+        return denormalize_image(reconstruct_image(samples))
 
 @dataclass
 class EMAFlowSampler(RectifiedFlowSampler):
