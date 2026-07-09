@@ -1,3 +1,6 @@
 /data
 .png
 .pth
+.mp4
+/outputs
+/__pycache__
