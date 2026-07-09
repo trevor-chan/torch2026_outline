@@ -26,19 +26,21 @@ class Trainer:
     peak_flops: float = 91.1e12  # RTX 6000 ADA peak FLOPS (91.1 TFLOPS)
     flops_per_batch: Optional[float] = None  # Will be computed when needed
     max_steps: Optional[int] = None
-    
+    amp_dtype: Optional[torch.dtype] = torch.bfloat16  # autocast dtype; None disables mixed precision
+
     @torch.compile
     def train_step(self, data: torch.Tensor, conditioning: Optional[torch.Tensor] = None):
         """
         Perform a training step on a batch of data.
         """
         self.optimizer.zero_grad()
-        
+
         data = data.to(self.device)
         if conditioning is not None:
             conditioning = conditioning.to(self.device)
-        loss = self.criterion(self.model, data, conditioning)
-        
+        with torch.autocast(self.device.type, dtype=self.amp_dtype, enabled=self.amp_dtype is not None):
+            loss = self.criterion(self.model, data, conditioning)
+
         loss.backward()
         self.optimizer.step()
         
@@ -46,12 +48,7 @@ class Trainer:
         # Update EMA weights if available
         if self.ema is not None:
             self.ema.update()
-        
-        # Update memory stats after each step if profiling is enabled
-        if self.profile_memory:
-            self.last_memory_stats = get_memory_usage(self.device)
-        
-        return loss.item()
+        return loss.detach()
 
     @staticmethod
     def _unpack_batch(batch):
@@ -116,13 +113,13 @@ class Trainer:
                 mfu = calculate_mfu(self.flops_per_batch, avg_step_time, self.peak_flops)
                 
                 # Build log message
-                log_message = (f"Step {step}, Loss: {loss:.4f}, "
+                log_message = (f"Step {step}, Loss: {loss.item():.4f}, "
                               f"Speed: {iterations_per_second:.2f} it/s, "
                               f"[MFU: {mfu:.2f}%]")
-                
+
                 # Add memory stats if profiling is enabled
                 if self.profile_memory:
-                    log_message += f", Memory: {self.last_memory_stats}"
+                    log_message += f", Memory: {get_memory_usage(self.device)}"
                 
                 print(log_message)
                 

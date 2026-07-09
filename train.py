@@ -9,7 +9,7 @@ from transformer import TransformerDiffusionModel
 from trainer import Trainer
 from utils import save_model, EMA
 from loss import RectifiedFlowLoss
-from callbacks import ValidationCallback, RectifiedFlowSampler, EMAFlowSampler
+from callbacks import ValidationCallback, RectifiedFlowSampler, EMAFlowSampler, CheckpointCallback
 
 def main():
     # Parse command line arguments
@@ -22,11 +22,14 @@ def main():
     parser.add_argument('--log-interval', type=int, default=2_000, help='how many steps to wait before logging training status')
     parser.add_argument('--val-interval', type=int, default=10_000, help='validation interval in steps (default: 50000)')
     parser.add_argument('--sample-interval', type=int, default=10_000, help='sampling interval in steps (default: 50000)')
+    parser.add_argument('--checkpoint-interval', type=int, default=10_000, help='checkpoint interval in steps; set 0 to disable')
+    parser.add_argument('--checkpoint-dir', type=str, default='outputs/checkpoints', help='directory for periodic checkpoints')
     parser.add_argument('--sample-steps', type=int, default=128, help='number of steps for sampling (default: 32)')
     parser.add_argument('--max-steps', type=int, default=None, help='optional number of training steps before stopping')
     parser.add_argument('--profile-memory', action='store_true', default=True, help='enable memory profiling')
     parser.add_argument('--ema-decay', type=float, default=0.999, help='EMA decay rate (default: 0.999)')
-    parser.add_argument('--dataset-size', type=int, default=500_000, help='number of synthetic training frames (default: 10000)')
+    parser.add_argument('--no-amp', action='store_true', help='disable bf16 mixed precision (torch.autocast)')
+    parser.add_argument('--dataset-size', type=int, default=50_000, help='number of synthetic training frames (default: 10000)')
     parser.add_argument('--val-size', type=int, default=2_000, help='number of synthetic validation frames (default: 2000)')
     parser.add_argument('--image-size', type=int, default=16, help='synthetic frame size in pixels (default: 16)')
     parser.add_argument('--model-dim', '--hidden-dim', dest='model_dim', type=int, default=512, help='transformer width (default: 256)')
@@ -51,14 +54,20 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
     # Set random seed for reproducibility
     torch.manual_seed(args.seed)
+
+    # Allow TF32 tensor cores for the fp32 matmuls that remain outside autocast
+    torch.set_float32_matmul_precision('high')
+
+    amp_dtype = None if args.no_amp else torch.bfloat16
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # initialize distributed training
     distributed = torch.cuda.is_available() and torch.cuda.device_count() > 1 and "LOCAL_RANK" in os.environ
+    rank = 0
     if distributed:
         torch.multiprocessing.set_start_method("spawn")
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
@@ -147,7 +156,8 @@ def main():
         criterion=criterion,
         device=device,
         num_iterations=args.val_steps,
-        call_every=args.val_interval
+        call_every=args.val_interval,
+        amp_dtype=amp_dtype,
     )
     
     # Regular sampling callback
@@ -167,7 +177,15 @@ def main():
         num_steps=args.sample_steps,
         call_every=args.sample_interval,
         output_dir="outputs/bouncing_ball_ema_samples",
-    )    
+    )
+
+    checkpoint_callback = CheckpointCallback(
+        model=model,
+        ema=ema,
+        call_every=args.checkpoint_interval,
+        output_dir=args.checkpoint_dir,
+        enabled=(not distributed or rank == 0),
+    )
     
     # Create trainer with callbacks and their respective dataloaders
     trainer = Trainer(
@@ -177,11 +195,12 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=device,
-        callbacks=[validation_callback, sampling_callback, ema_sampling_callback],
+        callbacks=[validation_callback, sampling_callback, ema_sampling_callback, checkpoint_callback],
         log_interval=args.log_interval,
         profile_memory=args.profile_memory,
         ema=ema,
         max_steps=args.max_steps,
+        amp_dtype=amp_dtype,
     )
     
     # Start training

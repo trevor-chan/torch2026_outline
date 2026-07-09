@@ -4,6 +4,7 @@ from typing import Optional, Callable, Tuple, List
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from image_utils import reconstruct_image, denormalize_image, one_hot_encode, save_image_batch
+from utils import save_model
 import os
 
 
@@ -32,7 +33,8 @@ class ValidationCallback:
     device: torch.device
     num_iterations: int = 100
     call_every: int = 1000
-    
+    amp_dtype: Optional[torch.dtype] = torch.bfloat16  # match training precision; None disables autocast
+
     @torch.compiler.disable()
     def __call__(self, training_step: int, dataloader: DataLoader = None) -> float:
         """
@@ -69,7 +71,8 @@ class ValidationCallback:
                     conditioning = conditioning.to(self.device)
                 
                 # Compute loss
-                loss = self.criterion(self.model, data, conditioning)
+                with torch.autocast(self.device.type, dtype=self.amp_dtype, enabled=self.amp_dtype is not None):
+                    loss = self.criterion(self.model, data, conditioning)
                 total_loss += loss.item()
                 
         print(f"Validation Loss: {total_loss / self.num_iterations:.4f}")
@@ -200,4 +203,39 @@ class EMAFlowSampler(RectifiedFlowSampler):
             super().__call__(training_step, dataloader, labels)
         finally:
             # Restore original weights, even if an exception occurs
+            self.ema.restore()
+
+
+@dataclass
+class CheckpointCallback:
+    """
+    Periodically save the current training weights and EMA weights.
+    """
+    model: nn.Module
+    ema: Optional[Callable] = None
+    call_every: int = 10_000
+    output_dir: str = "outputs/checkpoints"
+    model_filename: str = "bouncing_ball_diffusion_step_{step}.pth"
+    ema_filename: str = "bouncing_ball_diffusion_ema_step_{step}.pth"
+    enabled: bool = True
+
+    @torch.compiler.disable()
+    def __call__(self, training_step: int, dataloader: DataLoader = None):
+        if not self.enabled or self.call_every <= 0:
+            return None
+        if training_step == 0 or training_step % self.call_every != 0:
+            return None
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        model_path = os.path.join(self.output_dir, self.model_filename.format(step=training_step))
+        save_model(self.model, model_path)
+
+        if self.ema is None:
+            return None
+
+        ema_path = os.path.join(self.output_dir, self.ema_filename.format(step=training_step))
+        self.ema.store()
+        try:
+            save_model(self.model, ema_path)
+        finally:
             self.ema.restore()
