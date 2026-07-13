@@ -129,3 +129,45 @@ python eval.py dc --noise-controls independent,slerp --eta 0.5
 python eval.py dc --noise-controls independent,slerp --eta 0.85
 python eval.py dc --noise-controls independent,slerp --renoise-mode ddpm
 ```
+
+## Endpoint-conditioned stochastic SQUAD bridge
+
+The `bridge` command treats the deterministic SQUAD latent path as the central
+trajectory and adds uncertainty only inside intervals between observed frames.
+The residual envelope is exactly zero at every keyframe.
+
+```bash
+python eval.py bridge \
+  --samplers init,iterative \
+  --stochasticities 0.05,0.10,0.20 \
+  --num-samples 4 \
+  --innovation-mode piecewise-slerp \
+  --bridge-envelope sine \
+  --bridge-strength 0.25 \
+  --noise-refresh fixed
+```
+
+`init` perturbs the SQUAD terminal bridge once and then performs the normal
+deterministic ODE decode. `iterative` additionally guides the inferred terminal
+noise back toward the SQUAD bridge during every reverse step. Both use a
+variance-preserving residual mix, and both hard-project observed frames at the
+output; iterative mode also projects them at every step.
+
+Useful first ablations:
+
+```bash
+# Check that eta=0 reproduces (or nearly reproduces) deterministic SQUAD.
+python eval.py bridge --samplers init --stochasticities 0 --num-samples 1
+
+# One-shot uncertainty around the working latent interpolation.
+python eval.py bridge --samplers init --stochasticities 0.02,0.05,0.10
+
+# Test whether repeated guidance helps or over-constrains the trajectory.
+python eval.py bridge --samplers iterative --stochasticities 0,0.05,0.10 \
+  --bridge-strength 0.10
+```
+
+The outputs are written to `outputs/eval/endpoint_bridge/`. The MP4 shows the
+first stochastic sample from each configuration. The JSON reports aggregate
+fidelity over all samples plus diversity on missing frames. With
+`--save-tensors`, every sample is retained for further analysis.

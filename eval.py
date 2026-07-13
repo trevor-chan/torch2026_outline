@@ -15,9 +15,20 @@ from eval_common import (
 )
 from eval_data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
 from eval_data_consistency import run_data_consistency_evaluation
+from eval_endpoint_bridge import run_endpoint_bridge_evaluation
 from eval_geodesic import run_latent_geodesic_evaluation
 from eval_latent_interpolation import run_latent_interpolation_evaluation
 from eval_roundtrip import run_roundtrip_evaluation
+
+
+def csv_float_list(value: str) -> list[float]:
+    try:
+        values = [float(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Expected comma-separated floating-point values.") from error
+    if not values:
+        raise argparse.ArgumentTypeError("Expected at least one comma-separated value.")
+    return values
 
 
 def csv_list(value: str) -> list[str]:
@@ -28,7 +39,7 @@ def csv_list(value: str) -> list[str]:
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--checkpoint", default="bouncing_ball_diffusion_ema.pth")
+    parser.add_argument("--checkpoint", default="outputs/checkpoints/bouncing_ball_diffusion_ema_step_150000.pth")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--non-strict-load", action="store_true")
@@ -123,6 +134,43 @@ def build_parser() -> argparse.ArgumentParser:
     latent = subparsers.add_parser("latent", parents=[common])
     add_geometry_arguments(latent)
     add_video_arguments(latent)
+
+    bridge = subparsers.add_parser("bridge", parents=[common])
+    bridge.add_argument(
+        "--samplers",
+        type=csv_list,
+        default=["init", "iterative"],
+        help="Comma-separated subset of init,iterative.",
+    )
+    bridge.add_argument(
+        "--stochasticities",
+        type=csv_float_list,
+        default=[0.1],
+        help="Comma-separated bridge residual amplitudes in [0,1].",
+    )
+    bridge.add_argument("--num-samples", type=int, default=4)
+    bridge.add_argument(
+        "--innovation-mode",
+        choices=("independent", "piecewise-slerp", "global-slerp", "segment-shared"),
+        default="piecewise-slerp",
+    )
+    bridge.add_argument(
+        "--bridge-envelope",
+        choices=("sine", "brownian", "quadratic"),
+        default="sine",
+    )
+    bridge.add_argument("--bridge-strength", type=float, default=0.25)
+    bridge.add_argument("--bridge-power", type=float, default=1.0)
+    bridge.add_argument("--noise-power", type=float, default=1.0)
+    bridge.add_argument("--bridge-blend", choices=("slerp", "lerp"), default="slerp")
+    bridge.add_argument("--noise-refresh", choices=("fixed", "fresh"), default="fixed")
+    bridge.add_argument("--dc-strength", type=float, default=1.0)
+    bridge.add_argument("--slerp-mode", choices=("iscs", "radius-lerp"), default="iscs")
+    bridge.add_argument(
+        "--boundary-noise-mode", choices=("shared", "independent"), default="shared"
+    )
+    bridge.add_argument("--clip-x0", action="store_true")
+    add_video_arguments(bridge)
 
     dc = subparsers.add_parser("dc", parents=[common])
     dc.add_argument(
@@ -220,6 +268,12 @@ def main() -> None:
         validate_methods(args.methods)
     if args.command in {"dc", "all"}:
         validate_noise_controls(args.noise_controls)
+    if args.command == "bridge":
+        unknown_samplers = set(args.samplers) - {"init", "iterative"}
+        if unknown_samplers:
+            raise ValueError(f"Unknown bridge sampler(s): {sorted(unknown_samplers)}")
+        if any(value < 0.0 or value > 1.0 for value in args.stochasticities):
+            raise ValueError("All stochasticities must be in [0, 1]")
 
     if args.command in {"roundtrip", "all"}:
         roundtrip_dir = output_root / "roundtrip"
@@ -262,6 +316,35 @@ def main() -> None:
             boundary_noise_mode=args.boundary_noise_mode,
             seed=args.seed + 303,
             output_dir=str(output_root / "latent"),
+            video_fps=args.video_fps,
+            display_scale=args.display_scale,
+            gap=args.gap,
+            residual_scale=args.residual_scale,
+            save_tensors=args.save_tensors,
+        )
+
+    if args.command == "bridge":
+        run_endpoint_bridge_evaluation(
+            model=model,
+            device=device,
+            sequence=sequence,
+            flow=flow,
+            samplers=args.samplers,
+            stochasticities=args.stochasticities,
+            num_samples=args.num_samples,
+            innovation_mode=args.innovation_mode,
+            envelope_kind=args.bridge_envelope,
+            bridge_strength=args.bridge_strength,
+            bridge_power=args.bridge_power,
+            noise_power=args.noise_power,
+            bridge_blend=args.bridge_blend,
+            noise_refresh=args.noise_refresh,
+            dc_strength=args.dc_strength,
+            slerp_mode=args.slerp_mode,
+            boundary_noise_mode=args.boundary_noise_mode,
+            seed=args.seed + 505,
+            clip_x0=args.clip_x0,
+            output_dir=str(output_root / "endpoint_bridge"),
             video_fps=args.video_fps,
             display_scale=args.display_scale,
             gap=args.gap,
