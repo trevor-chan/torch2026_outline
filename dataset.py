@@ -25,13 +25,13 @@ class BouncingBallVideoDataset(Dataset):
         num_samples: int = 10_000,
         image_size: Union[int, Tuple[int, int]] = 32,
         seed: int = 0,
-        frame_dt: float = 0.5,
+        frame_dt: float = 0.25,
         average_bounce_time: float = 1.0,
         ball_radius: float = 2.5,
         trail_seconds: float = 2.0,
-        trail_samples_per_frame: int = 10,
+        trail_sample_dt: float = 0.05,
         bounce_jitter_degrees: float = 15.0,
-        color_walk_std: float = 0.075,
+        color_walk_std: float = 0.1,
         background_color: Tuple[float, float, float] = (0.02, 0.02, 0.025),
         normalize: bool = False,
         return_conditioning: bool = False,
@@ -49,7 +49,7 @@ class BouncingBallVideoDataset(Dataset):
         self.average_bounce_time = average_bounce_time
         self.ball_radius = ball_radius
         self.trail_seconds = trail_seconds
-        self.trail_samples_per_frame = max(1, int(trail_samples_per_frame))
+        self.trail_sample_dt = trail_sample_dt
         self.bounce_jitter_degrees = bounce_jitter_degrees
         self.color_walk_std = color_walk_std
         self.background_color = background_color
@@ -107,6 +107,8 @@ class BouncingBallVideoDataset(Dataset):
             raise ValueError("ball_radius must be positive")
         if self.frame_dt <= 0:
             raise ValueError("frame_dt must be positive")
+        if self.trail_sample_dt <= 0:
+            raise ValueError("trail_sample_dt must be positive")
         if self.average_bounce_time <= 0:
             raise ValueError("average_bounce_time must be positive")
 
@@ -125,11 +127,9 @@ class BouncingBallVideoDataset(Dataset):
         velocity = (speed * direction[0], speed * direction[1])
 
         hue = rng.random()
-        trail_point_count = max(
-            1,
-            int(round(self.trail_seconds / self.frame_dt * self.trail_samples_per_frame)),
-        )
+        trail_point_count = max(1, int(round(self.trail_seconds / self.trail_sample_dt)))
         history = []
+        time_since_sample = 0.0
         frames = torch.empty(
             self.num_samples,
             3,
@@ -157,7 +157,7 @@ class BouncingBallVideoDataset(Dataset):
             )
 
             next_hue = (hue + rng.gauss(0.0, self.color_walk_std)) % 1.0
-            x, y, velocity, path_points = self._advance_position(
+            x, y, velocity, path_points, time_since_sample = self._advance_position(
                 x=x,
                 y=y,
                 velocity=velocity,
@@ -168,6 +168,7 @@ class BouncingBallVideoDataset(Dataset):
                 max_y=max_y,
                 start_hue=hue,
                 end_hue=next_hue,
+                time_since_sample=time_since_sample,
             )
             history.extend(path_points)
             if len(history) > trail_point_count:
@@ -264,12 +265,17 @@ class BouncingBallVideoDataset(Dataset):
         max_y,
         start_hue,
         end_hue,
+        time_since_sample,
     ):
         vx, vy = velocity
         path_points = []
-        step_dt = self.frame_dt / self.trail_samples_per_frame
+        # Trail points are recorded on a fixed trail_sample_dt time grid so the
+        # rendered trail density (and hence composited opacity) is invariant to
+        # frame_dt; substeps only integrate the physics between grid points.
+        num_substeps = max(1, math.ceil(self.frame_dt / self.trail_sample_dt - 1e-9))
+        step_dt = self.frame_dt / num_substeps
 
-        for step_idx in range(self.trail_samples_per_frame):
+        for step_idx in range(num_substeps):
             x, vx, bounced_x = self._reflect_axis(x + vx * step_dt, vx, min_x, max_x)
             y, vy, bounced_y = self._reflect_axis(y + vy * step_dt, vy, min_y, max_y)
 
@@ -283,11 +289,14 @@ class BouncingBallVideoDataset(Dataset):
                 )
                 vx, vy = self._keep_velocity_inside_bounds(x, y, vx, vy, min_x, max_x, min_y, max_y)
 
-            amount = (step_idx + 1) / self.trail_samples_per_frame
-            hue = self._interpolate_hue(start_hue, end_hue, amount)
-            path_points.append((x, y, colorsys.hsv_to_rgb(hue, 0.85, 1.0)))
+            time_since_sample += step_dt
+            if time_since_sample >= self.trail_sample_dt - 1e-9:
+                time_since_sample -= self.trail_sample_dt
+                amount = (step_idx + 1) / num_substeps
+                hue = self._interpolate_hue(start_hue, end_hue, amount)
+                path_points.append((x, y, colorsys.hsv_to_rgb(hue, 0.85, 1.0)))
 
-        return x, y, (vx, vy), path_points
+        return x, y, (vx, vy), path_points, time_since_sample
 
     @staticmethod
     def _interpolate_hue(start_hue, end_hue, amount):

@@ -4,3 +4,4 @@
 .mp4
 /outputs
 /__pycache__
+*.pth

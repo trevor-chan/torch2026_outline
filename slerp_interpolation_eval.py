@@ -65,7 +65,23 @@ def integrate_flow(
     return x
 
 
-def slerp(a: torch.Tensor, b: torch.Tensor, weight: float, eps: float = 1e-7) -> torch.Tensor:
+def slerp(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    weight: float,
+    eps: float = 1e-8,
+    mode: str = "iscs",
+) -> torch.Tensor:
+    """Spherical interpolation between batched tensors flattened per sample.
+
+    ``mode="iscs"`` mirrors the implementation in duchenhe/ISCS: compute the
+    angle from normalized endpoints, then apply the sine weights directly to
+    the original tensors. ``mode="radius-lerp"`` preserves the previous local
+    behavior: interpolate unit directions on the sphere and linearly interpolate
+    endpoint radii.
+    """
+    if mode not in ("iscs", "radius-lerp"):
+        raise ValueError(f"unknown slerp mode: {mode}")
     if weight <= 0.0:
         return a
     if weight >= 1.0:
@@ -75,17 +91,22 @@ def slerp(a: torch.Tensor, b: torch.Tensor, weight: float, eps: float = 1e-7) ->
     a_flat = a.flatten(start_dim=1)
     b_flat = b.flatten(start_dim=1)
 
-    a_norm = a_flat.norm(dim=1, keepdim=True).clamp_min(eps)
-    b_norm = b_flat.norm(dim=1, keepdim=True).clamp_min(eps)
-    a_unit = a_flat / a_norm
-    b_unit = b_flat / b_norm
+    a_norm = a_flat.norm(dim=1, keepdim=True)
+    b_norm = b_flat.norm(dim=1, keepdim=True)
 
-    dot = (a_unit * b_unit).sum(dim=1, keepdim=True).clamp(-1.0 + eps, 1.0 - eps)
-    omega = torch.acos(dot)
-    sin_omega = torch.sin(omega).clamp_min(eps)
+    dot = (a_flat * b_flat).sum(dim=1, keepdim=True)
+    cos_theta = (dot / (a_norm * b_norm + eps)).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+    omega = torch.acos(cos_theta)
+    sin_omega = torch.sin(omega)
 
-    left = torch.sin((1.0 - weight) * omega) / sin_omega
-    right = torch.sin(weight * omega) / sin_omega
+    left = torch.sin((1.0 - weight) * omega) / (sin_omega + eps)
+    right = torch.sin(weight * omega) / (sin_omega + eps)
+
+    if mode == "iscs":
+        return (left * a_flat + right * b_flat).view(original_shape)
+
+    a_unit = a_flat / a_norm.clamp_min(eps)
+    b_unit = b_flat / b_norm.clamp_min(eps)
     direction = left * a_unit + right * b_unit
     radius = torch.lerp(a_norm, b_norm, weight)
 
@@ -244,6 +265,49 @@ def make_visualization_frames(
     return torch.stack(frames, dim=0)
 
 
+def make_denovo_visualization_frames(
+    low_rate: torch.Tensor,
+    predictions: torch.Tensor,
+    low_rate_noise: torch.Tensor,
+    prediction_noise: torch.Tensor,
+    residual_scale: float,
+    noise_display_clip: float,
+    display_scale: int,
+    row_gap: int,
+) -> torch.Tensor:
+    frames = []
+
+    for nearest_endpoint, prediction, nearest_noise, latent_noise in zip(
+        low_rate,
+        predictions,
+        low_rate_noise,
+        prediction_noise,
+    ):
+        data_panels = [
+            nearest_endpoint.clamp(0.0, 1.0),
+            prediction.clamp(0.0, 1.0),
+            residual_image(prediction, nearest_endpoint, residual_scale),
+        ]
+        noise_panels = [
+            noise_image(nearest_noise, noise_display_clip),
+            noise_image(latent_noise, noise_display_clip),
+            noise_residual_image(latent_noise, nearest_noise, noise_display_clip),
+        ]
+        rows = [
+            concat_with_gap(data_panels, dim=-1, gap=row_gap),
+            concat_with_gap(noise_panels, dim=-1, gap=row_gap),
+        ]
+        panel = concat_with_gap(rows, dim=-2, gap=row_gap)
+
+        if display_scale > 1:
+            panel = panel.repeat_interleave(display_scale, dim=-2).repeat_interleave(display_scale, dim=-1)
+
+        frame = panel.clamp(0.0, 1.0).permute(1, 2, 0).mul(255.0).round().to(torch.uint8)
+        frames.append(frame)
+
+    return torch.stack(frames, dim=0)
+
+
 def make_nearest_endpoint_intervals(
     endpoints_a: torch.Tensor,
     endpoints_b: torch.Tensor,
@@ -305,9 +369,9 @@ def main():
     parser.add_argument("--compile", action="store_true", help="compile the model before evaluation")
     parser.add_argument("--non-strict-load", action="store_true", help="allow missing/unexpected checkpoint keys")
 
-    parser.add_argument("--image-size", type=int, default=16)
-    parser.add_argument("--model-dim", type=int, default=512)
-    parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--image-size", type=int, default=32)
+    parser.add_argument("--model-dim", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--time-embed-dim", type=int, default=None)
     parser.add_argument("--rope-theta", type=float, default=100.0)
@@ -321,7 +385,7 @@ def main():
         default=None,
         help="high-rate frames between interval starts; unset keeps intervals contiguous",
     )
-    parser.add_argument("--training-frame-dt", type=float, default=0.2)
+    parser.add_argument("--training-frame-dt", type=float, default=0.25)
     parser.add_argument("--high-frame-dt", type=float, default=0.02)
     parser.add_argument("--training-color-walk-std", type=float, default=0.075)
     parser.add_argument("--color-walk-std", type=float, default=None)
@@ -330,6 +394,17 @@ def main():
     parser.add_argument("--solver", choices=("euler", "heun"), default="euler")
     parser.add_argument("--data-eps", type=float, default=1e-3, help="start this far after t=0 when encoding from images")
     parser.add_argument("--t-eps", type=float, default=1e-3, help="stop this far before t=1 when encoding to noise")
+    parser.add_argument(
+        "--slerp-mode",
+        choices=("iscs", "radius-lerp"),
+        default="iscs",
+        help="iscs mirrors duchenhe/ISCS; radius-lerp preserves the previous local behavior",
+    )
+    parser.add_argument(
+        "--denovo-noise-trajectory",
+        action="store_true",
+        help="sample noise endpoints directly and decode a geodesic noise-space trajectory",
+    )
     parser.add_argument("--decode-batch-size", type=int, default=32)
     parser.add_argument("--encode-batch-size", type=int, default=32)
 
@@ -363,32 +438,45 @@ def main():
     drop_duplicate_boundaries = pair_stride == endpoint_stride
     num_samples = int(pair_ends[-1].item()) + 1
 
-    print(
-        f"Generating {num_samples} high-rate frames "
-        f"(dt={args.high_frame_dt}, endpoint spacing={actual_endpoint_dt:.4f}s, "
-        f"intervals={args.num_pairs}, data_time={data_time:.6f}, noise_time={noise_time:.6f})"
-    )
-    dataset = BouncingBallVideoDataset(
-        num_samples=num_samples,
-        image_size=args.image_size,
-        seed=args.seed,
-        frame_dt=args.high_frame_dt,
-        color_walk_std=color_walk_std,
-        write_video=False,
-    )
-    samples = dataset.samples
+    if args.denovo_noise_trajectory:
+        stitched_frames = (
+            args.num_pairs * endpoint_stride + 1
+            if drop_duplicate_boundaries
+            else args.num_pairs * (endpoint_stride + 1)
+        )
+        print(
+            f"Generating de novo noise trajectory with {stitched_frames} decoded frames "
+            f"(endpoint spacing={actual_endpoint_dt:.4f}s, intervals={args.num_pairs}, "
+            f"slerp_mode={args.slerp_mode}, data_time={data_time:.6f}, noise_time={noise_time:.6f})"
+        )
+    else:
+        print(
+            f"Generating {num_samples} high-rate frames "
+            f"(dt={args.high_frame_dt}, endpoint spacing={actual_endpoint_dt:.4f}s, "
+            f"intervals={args.num_pairs}, slerp_mode={args.slerp_mode}, "
+            f"data_time={data_time:.6f}, noise_time={noise_time:.6f})"
+        )
+        dataset = BouncingBallVideoDataset(
+            num_samples=num_samples,
+            image_size=args.image_size,
+            seed=args.seed,
+            frame_dt=args.high_frame_dt,
+            color_walk_std=color_walk_std,
+            write_video=False,
+        )
+        samples = dataset.samples
 
-    endpoints_a = samples[pair_starts]
-    endpoints_b = samples[pair_ends]
-    ground_truth_intervals = torch.stack(
-        [samples[pair_starts + offset] for offset in range(endpoint_stride + 1)],
-        dim=0,
-    )
-    low_rate_intervals = make_nearest_endpoint_intervals(
-        endpoints_a=endpoints_a,
-        endpoints_b=endpoints_b,
-        num_times=endpoint_stride + 1,
-    )
+        endpoints_a = samples[pair_starts]
+        endpoints_b = samples[pair_ends]
+        ground_truth_intervals = torch.stack(
+            [samples[pair_starts + offset] for offset in range(endpoint_stride + 1)],
+            dim=0,
+        )
+        low_rate_intervals = make_nearest_endpoint_intervals(
+            endpoints_a=endpoints_a,
+            endpoints_b=endpoints_b,
+            num_times=endpoint_stride + 1,
+        )
 
     model = TransformerDiffusionModel(
         in_channels=3,
@@ -408,29 +496,48 @@ def main():
     if args.compile:
         model = torch.compile(model)
 
-    # One shared eps-noise draw for every encode that starts from real data, so
-    # shared boundary frames and both endpoints of a pair get consistent
-    # background latents.
-    encode_eps_noise = torch.randn(3, args.image_size, args.image_size)
+    if args.denovo_noise_trajectory:
+        if drop_duplicate_boundaries:
+            noise_keyframes = torch.randn(
+                args.num_pairs + 1,
+                3,
+                args.image_size,
+                args.image_size,
+                device=device,
+            )
+            noise_a = noise_keyframes[:-1]
+            noise_b = noise_keyframes[1:]
+        else:
+            noise_a = torch.randn(args.num_pairs, 3, args.image_size, args.image_size, device=device)
+            noise_b = torch.randn(args.num_pairs, 3, args.image_size, args.image_size, device=device)
 
-    endpoints = torch.cat([endpoints_a, endpoints_b], dim=0).to(device)
-    endpoints = perturb_to_p_eps(endpoints, data_time, encode_eps_noise)
-    encoded = integrate_flow(
-        model=model,
-        x=endpoints,
-        t_start=data_time,
-        t_end=noise_time,
-        num_steps=args.ode_steps,
-        solver=args.solver,
-        desc="Encoding endpoints to noise",
-    )
-    noise_a, noise_b = encoded.chunk(2, dim=0)
-    encoded_cpu = encoded.detach().cpu()
-    print_noise_stats(f"Encoded endpoint noise at t={noise_time:.6f}", encoded_cpu)
-    print_noise_stats("Reference Gaussian", torch.randn_like(encoded_cpu))
+        encoded_cpu = torch.cat([noise_a, noise_b], dim=0).detach().cpu()
+        print_noise_stats("De novo Gaussian endpoint noise", encoded_cpu)
+        print_noise_stats("Reference Gaussian", torch.randn_like(encoded_cpu))
+    else:
+        # One shared eps-noise draw for every encode that starts from real data,
+        # so shared boundary frames and both endpoints of a pair get consistent
+        # background latents.
+        encode_eps_noise = torch.randn(3, args.image_size, args.image_size)
+
+        endpoints = torch.cat([endpoints_a, endpoints_b], dim=0).to(device)
+        endpoints = perturb_to_p_eps(endpoints, data_time, encode_eps_noise)
+        encoded = integrate_flow(
+            model=model,
+            x=endpoints,
+            t_start=data_time,
+            t_end=noise_time,
+            num_steps=args.ode_steps,
+            solver=args.solver,
+            desc="Encoding endpoints to noise",
+        )
+        noise_a, noise_b = encoded.chunk(2, dim=0)
+        encoded_cpu = encoded.detach().cpu()
+        print_noise_stats(f"Encoded endpoint noise at t={noise_time:.6f}", encoded_cpu)
+        print_noise_stats("Reference Gaussian", torch.randn_like(encoded_cpu))
 
     weights = torch.linspace(0.0, 1.0, endpoint_stride + 1)
-    latent_rows = [slerp(noise_a, noise_b, float(weight)) for weight in weights]
+    latent_rows = [slerp(noise_a, noise_b, float(weight), mode=args.slerp_mode) for weight in weights]
     latent_intervals = torch.stack(latent_rows, dim=0)
     latents = latent_intervals.flatten(0, 1)
 
@@ -447,64 +554,109 @@ def main():
     )
     prediction_intervals = decoded.view(endpoint_stride + 1, args.num_pairs, 3, args.image_size, args.image_size)
 
-    ground_truth = stitch_intervals(
-        ground_truth_intervals,
-        drop_duplicate_boundaries=drop_duplicate_boundaries,
-    )
-    low_rate = stitch_intervals(
-        low_rate_intervals,
-        drop_duplicate_boundaries=drop_duplicate_boundaries,
-    )
-    predictions = stitch_intervals(
-        prediction_intervals,
-        drop_duplicate_boundaries=drop_duplicate_boundaries,
-    )
-    low_rate_noise_intervals = make_nearest_endpoint_intervals(
-        endpoints_a=noise_a.cpu(),
-        endpoints_b=noise_b.cpu(),
-        num_times=endpoint_stride + 1,
-    )
-    low_rate_noise = stitch_intervals(
-        low_rate_noise_intervals,
-        drop_duplicate_boundaries=drop_duplicate_boundaries,
-    )
-    prediction_noise = stitch_intervals(
-        latent_intervals.cpu(),
-        drop_duplicate_boundaries=drop_duplicate_boundaries,
-    )
-    ground_truth_noise = encode_in_chunks(
-        model=model,
-        samples=ground_truth,
-        ode_steps=args.ode_steps,
-        solver=args.solver,
-        data_time=data_time,
-        noise_time=noise_time,
-        chunk_size=args.encode_batch_size,
-        device=device,
-        eps_noise=encode_eps_noise,
-        desc="Encoding ground truth frames to noise",
-    )
-    print_noise_stats(f"Ground-truth timeline noise at t={noise_time:.6f}", ground_truth_noise)
-    print_noise_stats(f"SLERP timeline noise at t={noise_time:.6f}", prediction_noise)
+    if args.denovo_noise_trajectory:
+        low_rate_intervals = make_nearest_endpoint_intervals(
+            endpoints_a=prediction_intervals[0],
+            endpoints_b=prediction_intervals[-1],
+            num_times=endpoint_stride + 1,
+        )
+        low_rate = stitch_intervals(
+            low_rate_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        predictions = stitch_intervals(
+            prediction_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        low_rate_noise_intervals = make_nearest_endpoint_intervals(
+            endpoints_a=noise_a.cpu(),
+            endpoints_b=noise_b.cpu(),
+            num_times=endpoint_stride + 1,
+        )
+        low_rate_noise = stitch_intervals(
+            low_rate_noise_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        prediction_noise = stitch_intervals(
+            latent_intervals.cpu(),
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        print_noise_stats(f"De novo SLERP timeline noise at t={noise_time:.6f}", prediction_noise)
 
-    clipped_predictions = predictions.clamp(0.0, 1.0)
-    mae = (clipped_predictions - ground_truth).abs().mean().item()
-    mse = ((clipped_predictions - ground_truth) ** 2).mean().item()
-    psnr = -10.0 * math.log10(max(mse, 1e-12))
-    print(f"MAE: {mae:.6f} | MSE: {mse:.6f} | PSNR: {psnr:.2f} dB")
+        clipped_predictions = predictions.clamp(0.0, 1.0)
+        step_mae = (clipped_predictions[1:] - clipped_predictions[:-1]).abs().mean().item()
+        endpoint_mae = (clipped_predictions - low_rate.clamp(0.0, 1.0)).abs().mean().item()
+        print(f"Frame-step MAE: {step_mae:.6f} | Nearest-endpoint MAE: {endpoint_mae:.6f}")
 
-    frames = make_visualization_frames(
-        ground_truth=ground_truth,
-        low_rate=low_rate,
-        predictions=predictions,
-        ground_truth_noise=ground_truth_noise,
-        low_rate_noise=low_rate_noise,
-        prediction_noise=prediction_noise,
-        residual_scale=args.residual_scale,
-        noise_display_clip=args.noise_display_clip,
-        display_scale=args.display_scale,
-        row_gap=args.row_gap,
-    )
+        frames = make_denovo_visualization_frames(
+            low_rate=low_rate,
+            predictions=predictions,
+            low_rate_noise=low_rate_noise,
+            prediction_noise=prediction_noise,
+            residual_scale=args.residual_scale,
+            noise_display_clip=args.noise_display_clip,
+            display_scale=args.display_scale,
+            row_gap=args.row_gap,
+        )
+    else:
+        ground_truth = stitch_intervals(
+            ground_truth_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        low_rate = stitch_intervals(
+            low_rate_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        predictions = stitch_intervals(
+            prediction_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        low_rate_noise_intervals = make_nearest_endpoint_intervals(
+            endpoints_a=noise_a.cpu(),
+            endpoints_b=noise_b.cpu(),
+            num_times=endpoint_stride + 1,
+        )
+        low_rate_noise = stitch_intervals(
+            low_rate_noise_intervals,
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        prediction_noise = stitch_intervals(
+            latent_intervals.cpu(),
+            drop_duplicate_boundaries=drop_duplicate_boundaries,
+        )
+        ground_truth_noise = encode_in_chunks(
+            model=model,
+            samples=ground_truth,
+            ode_steps=args.ode_steps,
+            solver=args.solver,
+            data_time=data_time,
+            noise_time=noise_time,
+            chunk_size=args.encode_batch_size,
+            device=device,
+            eps_noise=encode_eps_noise,
+            desc="Encoding ground truth frames to noise",
+        )
+        print_noise_stats(f"Ground-truth timeline noise at t={noise_time:.6f}", ground_truth_noise)
+        print_noise_stats(f"SLERP timeline noise at t={noise_time:.6f}", prediction_noise)
+
+        clipped_predictions = predictions.clamp(0.0, 1.0)
+        mae = (clipped_predictions - ground_truth).abs().mean().item()
+        mse = ((clipped_predictions - ground_truth) ** 2).mean().item()
+        psnr = -10.0 * math.log10(max(mse, 1e-12))
+        print(f"MAE: {mae:.6f} | MSE: {mse:.6f} | PSNR: {psnr:.2f} dB")
+
+        frames = make_visualization_frames(
+            ground_truth=ground_truth,
+            low_rate=low_rate,
+            predictions=predictions,
+            ground_truth_noise=ground_truth_noise,
+            low_rate_noise=low_rate_noise,
+            prediction_noise=prediction_noise,
+            residual_scale=args.residual_scale,
+            noise_display_clip=args.noise_display_clip,
+            display_scale=args.display_scale,
+            row_gap=args.row_gap,
+        )
     write_video(frames, args.output, fps=args.video_fps)
     print(f"Saved SLERP interpolation visualization to {args.output}")
 

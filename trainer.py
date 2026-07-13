@@ -27,6 +27,7 @@ class Trainer:
     flops_per_batch: Optional[float] = None  # Will be computed when needed
     max_steps: Optional[int] = None
     amp_dtype: Optional[torch.dtype] = torch.bfloat16  # autocast dtype; None disables mixed precision
+    grad_clip_norm: Optional[float] = 1.0  # max gradient norm; None disables clipping
 
     @torch.compile
     def train_step(self, data: torch.Tensor, conditioning: Optional[torch.Tensor] = None):
@@ -42,13 +43,19 @@ class Trainer:
             loss = self.criterion(self.model, data, conditioning)
 
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            self.grad_clip_norm if self.grad_clip_norm is not None else float("inf"),
+        )
+        if isinstance(grad_norm, torch.distributed.tensor.DTensor):
+            grad_norm = grad_norm.full_tensor()
         self.optimizer.step()
-        
-        
+
+
         # Update EMA weights if available
         if self.ema is not None:
             self.ema.update()
-        return loss.detach()
+        return loss.detach(), grad_norm.detach()
 
     @staticmethod
     def _unpack_batch(batch):
@@ -73,6 +80,10 @@ class Trainer:
         start_time = time.time()
         last_log_time = start_time
         steps_since_log = 0
+
+        # Gradient norm tracking between logs (kept on device to avoid syncs)
+        grad_norm_sum = None
+        grad_norm_max = None
         
         # Estimate FLOPs on first batch
         try:
@@ -95,8 +106,15 @@ class Trainer:
                 data, conditioning = self._unpack_batch(next(data_iter))
             
             # Perform training step
-            loss = self.train_step(data, conditioning)
-            
+            loss, grad_norm = self.train_step(data, conditioning)
+
+            if grad_norm_sum is None:
+                grad_norm_sum = grad_norm.clone()
+                grad_norm_max = grad_norm.clone()
+            else:
+                grad_norm_sum += grad_norm
+                torch.maximum(grad_norm_max, grad_norm, out=grad_norm_max)
+
             # Update step counter and iterations tracking
             step += 1
             steps_since_log += 1
@@ -112,8 +130,9 @@ class Trainer:
                 # Calculate MFU
                 mfu = calculate_mfu(self.flops_per_batch, avg_step_time, self.peak_flops)
                 
-                # Build log message
+                # Build log message (grad norms are pre-clipping)
                 log_message = (f"Step {step}, Loss: {loss.item():.4f}, "
+                              f"Grad norm: {grad_norm_sum.item() / steps_since_log:.3f} avg / {grad_norm_max.item():.3f} max, "
                               f"Speed: {iterations_per_second:.2f} it/s, "
                               f"[MFU: {mfu:.2f}%]")
 
@@ -126,3 +145,5 @@ class Trainer:
                 # Reset counters
                 steps_since_log = 0
                 last_log_time = current_time
+                grad_norm_sum = None
+                grad_norm_max = None

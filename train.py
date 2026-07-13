@@ -15,14 +15,14 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Bouncing Ball Frame Diffusion Model Training')
     parser.add_argument('--batch-size', type=int, default=256, help='input batch size for training (default: 256)')
-    parser.add_argument('--lr', type=float, default=0.00005, help='learning rate (default: 0.00005)')
+    parser.add_argument('--lr', type=float, default=0.00002, help='learning rate (default: 0.00005)')
     parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--save-model', action='store_true', default=True, help='save model after training')
     parser.add_argument('--val-steps', type=int, default=128, help='number of steps for validation (default: 100)')
-    parser.add_argument('--log-interval', type=int, default=2_000, help='how many steps to wait before logging training status')
-    parser.add_argument('--val-interval', type=int, default=10_000, help='validation interval in steps (default: 50000)')
-    parser.add_argument('--sample-interval', type=int, default=10_000, help='sampling interval in steps (default: 50000)')
-    parser.add_argument('--checkpoint-interval', type=int, default=10_000, help='checkpoint interval in steps; set 0 to disable')
+    parser.add_argument('--log-interval', type=int, default=1_000, help='how many steps to wait before logging training status')
+    parser.add_argument('--val-interval', type=int, default=5_000, help='validation interval in steps (default: 50000)')
+    parser.add_argument('--sample-interval', type=int, default=5_000, help='sampling interval in steps (default: 50000)')
+    parser.add_argument('--checkpoint-interval', type=int, default=5_000, help='checkpoint interval in steps; set 0 to disable')
     parser.add_argument('--checkpoint-dir', type=str, default='outputs/checkpoints', help='directory for periodic checkpoints')
     parser.add_argument('--sample-steps', type=int, default=128, help='number of steps for sampling (default: 32)')
     parser.add_argument('--max-steps', type=int, default=None, help='optional number of training steps before stopping')
@@ -31,9 +31,9 @@ def main():
     parser.add_argument('--no-amp', action='store_true', help='disable bf16 mixed precision (torch.autocast)')
     parser.add_argument('--dataset-size', type=int, default=50_000, help='number of synthetic training frames (default: 10000)')
     parser.add_argument('--val-size', type=int, default=2_000, help='number of synthetic validation frames (default: 2000)')
-    parser.add_argument('--image-size', type=int, default=16, help='synthetic frame size in pixels (default: 16)')
-    parser.add_argument('--model-dim', '--hidden-dim', dest='model_dim', type=int, default=512, help='transformer width (default: 256)')
-    parser.add_argument('--num-layers', type=int, default=4, help='number of transformer blocks (default: 4)')
+    parser.add_argument('--image-size', type=int, default=32, help='synthetic frame size in pixels (default: 16)')
+    parser.add_argument('--model-dim', '--hidden-dim', dest='model_dim', type=int, default=256, help='transformer width (default: 256)')
+    parser.add_argument('--num-layers', type=int, default=6, help='number of transformer blocks (default: 4)')
     parser.add_argument('--num-heads', type=int, default=4, help='number of attention heads (default: 4)')
     parser.add_argument('--time-embed-dim', type=int, default=None, help='time embedding width (default: model dim)')
     parser.add_argument('--drop-rate', type=float, default=0.0, help='transformer residual dropout (default: 0.0)')
@@ -144,7 +144,7 @@ def main():
     
     # Define loss and optimizer
     criterion = RectifiedFlowLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
     # optimizer = optim.Muon(model.parameters(), lr=args.lr * 10)
     
     # Create EMA for model weights

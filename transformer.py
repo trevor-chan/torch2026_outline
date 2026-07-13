@@ -54,15 +54,21 @@ class SwiGLU(nn.Module):
 
 
 class SinusoidalTimeEmbedding(nn.Module):
-    """Standard sinusoidal embedding for scalar diffusion timesteps."""
+    """Standard sinusoidal embedding for scalar diffusion timesteps.
 
-    def __init__(self, dim: int, max_period: float = 10_000.0):
+    ``scale`` maps continuous rectified-flow timesteps in [0, 1] onto the
+    [0, 1000] range the ``max_period=10_000`` frequency spectrum was designed
+    for (DDPM/DiT convention; SD3/Flux use the same t * 1000 scaling).
+    """
+
+    def __init__(self, dim: int, max_period: float = 10_000.0, scale: float = 1000.0):
         super().__init__()
         self.dim = dim
         self.max_period = max_period
+        self.scale = scale
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        t = t.float().view(-1)
+        t = t.float().view(-1) * self.scale
         half_dim = self.dim // 2
         frequencies = torch.exp(
             -math.log(self.max_period)
@@ -221,6 +227,7 @@ class Attention(nn.Module):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         rope_theta: float = 100.0,
+        qk_norm: bool = False,
     ):
         super().__init__()
         assert dim % num_heads == 0
@@ -231,6 +238,11 @@ class Attention(nn.Module):
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
+
+        # Per-head RMSNorm on queries/keys bounds attention logits
+        # (SD3/ViT-22B recipe against logit-growth divergence)
+        self.q_norm = RMSNorm(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = RMSNorm(self.head_dim) if qk_norm else nn.Identity()
 
         self.attn_drop = attn_drop
         self.proj_drop = nn.Dropout(proj_drop)
@@ -253,6 +265,9 @@ class Attention(nn.Module):
             h=self.num_heads,
             d=self.head_dim,
         ).unbind(0)
+
+        q = self.q_norm(q)
+        k = self.k_norm(k)
 
         # Apply RoPE
         q, k = self.rope(q, k, h, w, num_prefix_tokens=num_prefix_tokens)
@@ -289,6 +304,7 @@ class TransformerBlock(nn.Module):
         norm_layer: type = RMSNorm,
         init_values: Optional[float] = None,
         rope_theta: float = 100.0,
+        qk_norm: bool = False,
     ):
         super().__init__()
 
@@ -301,6 +317,7 @@ class TransformerBlock(nn.Module):
             attn_drop=attn_drop,
             proj_drop=drop,
             rope_theta=rope_theta,
+            qk_norm=qk_norm,
         )
 
         self.norm2 = norm_layer(dim)
@@ -312,15 +329,25 @@ class TransformerBlock(nn.Module):
         h: int,
         w: int,
         num_prefix_tokens: int = 0,
-        modulation: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        modulation: Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
-        x = x + self.attn(
-            apply_modulation(self.norm1(x), modulation),
+        if modulation is None:
+            scale_shift = None
+            gate = None
+        else:
+            scale, shift, gate = modulation
+            scale_shift = (scale, shift)
+
+        attn_out = self.attn(
+            apply_modulation(self.norm1(x), scale_shift),
             h,
             w,
             num_prefix_tokens=num_prefix_tokens,
         )
-        x = x + self.mlp(apply_modulation(self.norm2(x), modulation))
+        x = x + (attn_out if gate is None else gate * attn_out)
+
+        mlp_out = self.mlp(apply_modulation(self.norm2(x), scale_shift))
+        x = x + (mlp_out if gate is None else gate * mlp_out)
         return x
 
 
@@ -499,8 +526,10 @@ class TransformerDiffusionModel(nn.Module):
 
     Each image pixel is treated as one token with RGB channels projected into the
     transformer width. Spatial position is supplied through 2D RoPE in attention.
-    A single timestep-dependent scale/shift pair is computed once per forward
-    pass and reused identically in every transformer block.
+    A single timestep-dependent scale/shift/gate triple is computed once per
+    forward pass and reused identically in every transformer block. The gate
+    multiplies each residual branch (adaLN-Zero style): the modulation MLP's
+    zero-initialized output layer makes every block start as identity.
     """
 
     def __init__(
@@ -516,6 +545,7 @@ class TransformerDiffusionModel(nn.Module):
         attn_drop_rate: float = 0.0,
         rope_theta: float = 100.0,
         norm_layer: type = RMSNorm,
+        qk_norm: bool = True,
     ):
         super().__init__()
 
@@ -531,7 +561,7 @@ class TransformerDiffusionModel(nn.Module):
         self.time_modulation = nn.Sequential(
             nn.Linear(time_embed_dim, dim * 4),
             nn.SiLU(),
-            nn.Linear(dim * 4, dim * 2),
+            nn.Linear(dim * 4, dim * 3),
         )
         self.blocks = nn.ModuleList(
             [
@@ -543,6 +573,7 @@ class TransformerDiffusionModel(nn.Module):
                     attn_drop=attn_drop_rate,
                     norm_layer=norm_layer,
                     rope_theta=rope_theta,
+                    qk_norm=qk_norm,
                 )
                 for _ in range(depth)
             ]
@@ -562,10 +593,10 @@ class TransformerDiffusionModel(nn.Module):
         nn.init.zeros_(self.time_modulation[-1].weight)
         nn.init.zeros_(self.time_modulation[-1].bias)
 
-    def _time_modulation(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _time_modulation(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         time_embedding = self.time_embedding(t)
-        scale, shift = self.time_modulation(time_embedding).chunk(2, dim=-1)
-        return scale.unsqueeze(1), shift.unsqueeze(1)
+        scale, shift, gate = self.time_modulation(time_embedding).chunk(3, dim=-1)
+        return scale.unsqueeze(1), shift.unsqueeze(1), gate.unsqueeze(1)
 
     def forward(
         self,
