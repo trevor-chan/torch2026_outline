@@ -34,20 +34,57 @@ python -m flow_interpolation train --help
 python -m flow_interpolation eval --help
 ```
 
-Training writes previews, samples, and checkpoints under `outputs/` by default:
+Each fresh training command creates a new timestamped work directory under
+`outputs/runs/`. Use `--run-name` for a readable name; an existing name receives a
+numeric suffix instead of being overwritten:
 
 ```bash
 python -m flow_interpolation train \
+  --run-name baseline \
   --max-steps 150000 \
   --checkpoint-interval 5000
 ```
 
+Each run contains its configuration, TensorBoard events, checkpoints, samples,
+dataset preview, and final model exports:
+
+```text
+outputs/runs/baseline/
+|-- config.json
+|-- artifacts/
+|-- checkpoints/step_000005000.pt
+|-- samples/model/
+|-- samples/ema/
+|-- tensorboard/
+`-- model_ema_final_step_000150000.pth
+```
+
+Checkpoints contain the model, optimizer, EMA, completed step, and PyTorch RNG
+state. Resume from either a run directory or a specific checkpoint; saved arguments
+become defaults, while explicitly supplied options override them:
+
+```bash
+python -m flow_interpolation train \
+  --resume outputs/runs/baseline \
+  --max-steps 200000
+```
+
+Inspect all runs with:
+
+```bash
+tensorboard --logdir outputs/runs
+```
+
+MFU uses measured forward-plus-backward model FLOPs and a per-device peak supplied
+by `--peak-tflops` (91.1 by default). TensorBoard records loss, validation loss,
+gradient norms, learning rate, step time, throughput, MFU, memory, and sample images.
+
 Evaluation is organized by experiment. For example:
 
 ```bash
-python -m flow_interpolation eval latent --checkpoint outputs/checkpoints/model.pth
-python -m flow_interpolation eval hybrid --checkpoint outputs/checkpoints/model.pth
-python -m flow_interpolation eval roundtrip --checkpoint outputs/checkpoints/model.pth
+python -m flow_interpolation eval latent --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
+python -m flow_interpolation eval hybrid --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
+python -m flow_interpolation eval roundtrip --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 ```
 
 Run the focused unit tests with `pytest`.

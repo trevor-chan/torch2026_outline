@@ -25,7 +25,7 @@ class BouncingBallVideoDataset(Dataset):
         seed: int = 0,
         frame_dt: float = 0.25,
         average_bounce_time: float = 1.0,
-        ball_radius: float = 2.5,
+        ball_radius: float = 1.5,
         trail_seconds: float = 2.0,
         trail_sample_dt: float = 0.05,
         bounce_jitter_degrees: float = 15.0,

@@ -66,7 +66,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=1234)
 
     parser.add_argument("--num-intervals", type=int, default=10)
-    parser.add_argument("--start-index", type=int, default=64)
+    parser.add_argument("--start-index", type=int, default=512)
     parser.add_argument("--training-frame-dt", type=float, default=0.25)
     parser.add_argument("--high-frame-dt", type=float, default=0.02)
     parser.add_argument(

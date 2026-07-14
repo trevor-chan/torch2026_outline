@@ -1,194 +1,181 @@
-import torch
-import psutil
+"""Shared training performance, memory, model, and EMA utilities."""
+
+from __future__ import annotations
+
 import os
+from pathlib import Path
+from typing import Any
 
-def save_model(model, path='model.pth'):
-    """
-    Save model to disk
-    
-    Args:
-        model: PyTorch model to save
-        path: Path to save the model
-    """
-    torch.save(model.state_dict(), path)
-    print(f"Model saved to {path}")
+import psutil
+import torch
 
-def load_model(model, path='model.pth', device='cpu'):
-    """
-    Load model from disk
-    
-    Args:
-        model: PyTorch model to load weights into
-        path: Path to load the model from
-        device: Device to load the model to
-        
-    Returns:
-        model: Loaded model
-    """
-    model.load_state_dict(torch.load(path, map_location=device))
+
+def unwrap_compiled_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying module from one or more torch.compile wrappers."""
+    while hasattr(model, "_orig_mod"):
+        model = model._orig_mod
     return model
 
-def estimate_flops(model, data, conditioning=None, device=None):
-    """
-    Estimate FLOPs per batch for the model.
-    This is a simple estimation using PyTorch's FlopCounterMode.
-    
-    Args:
-        model: PyTorch model to estimate FLOPs for
-        data: Input data tensor
-        conditioning: Conditioning tensor
-        device: Device to run estimation on
-        
-    Returns:
-        float: Estimated FLOPs per batch
-    """
+
+def normalize_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Strip common compile/distributed prefixes from checkpoint keys."""
+    normalized = {}
+    for key, value in state_dict.items():
+        while key.startswith("module.") or key.startswith("_orig_mod."):
+            key = key.removeprefix("module.").removeprefix("_orig_mod.")
+        normalized[key] = value
+    return normalized
+
+
+def save_model(model: torch.nn.Module, path: str | os.PathLike[str] = "model.pth") -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(unwrap_compiled_model(model).state_dict(), path)
+    print(f"Model saved to {path}")
+    return path
+
+
+def load_model(
+    model: torch.nn.Module,
+    path: str | os.PathLike[str] = "model.pth",
+    device: torch.device | str = "cpu",
+) -> torch.nn.Module:
+    state_dict = torch.load(path, map_location=device, weights_only=True)
+    unwrap_compiled_model(model).load_state_dict(normalize_state_dict(state_dict))
+    return model
+
+
+def estimate_training_flops(
+    model: torch.nn.Module,
+    data: torch.Tensor,
+    conditioning: torch.Tensor | None = None,
+    *,
+    device: torch.device | None = None,
+    amp_dtype: torch.dtype | None = None,
+) -> float:
+    """Estimate model forward and backward FLOPs for one training batch."""
     try:
         from torch.utils.flop_counter import FlopCounterMode
-        
-        # Move model inputs to the specified device if provided
+
+        profile_model = unwrap_compiled_model(model)
         if device is not None:
             data = data.to(device)
             if conditioning is not None:
                 conditioning = conditioning.to(device)
-        
-        # Create input tensor for model
-        model_input = (data, conditioning, torch.randn(data.shape[0], device=data.device))
-        
-        # Use FlopCounterMode as a context manager
-        with FlopCounterMode(model) as flop_counter:
-            _ = model(*model_input)
-        
-        # Get FLOPs count
-        flops = flop_counter.get_total_flops()
-        
-        print(f"Estimated model FLOPs per batch: {flops/1e9:.2f} GFLOPs")
+        time = torch.rand(data.shape[0], device=data.device, dtype=data.dtype)
+        was_training = profile_model.training
+        profile_model.train()
+        profile_model.zero_grad(set_to_none=True)
+        try:
+            with torch.enable_grad(), torch.autocast(
+                data.device.type,
+                dtype=amp_dtype,
+                enabled=amp_dtype is not None,
+            ), FlopCounterMode(display=False) as flop_counter:
+                profile_model(data, conditioning, time).sum().backward()
+            flops = float(flop_counter.get_total_flops())
+        finally:
+            profile_model.zero_grad(set_to_none=True)
+            profile_model.train(was_training)
+
+        print(f"Estimated training FLOPs per batch (forward + backward): {flops / 1e9:.2f} GFLOPs")
         return flops
-        
-    except ImportError:
-        print("Warning: torch.utils.flop_counter not available. Make sure you're using a recent PyTorch version.")
-        return 0
-    except Exception as e:
-        print(f"Error estimating FLOPs: {e}")
-        return 0
+    except Exception as error:
+        print(f"Could not estimate training FLOPs: {error}")
+        return 0.0
+
+
+# Compatibility alias for callers outside the trainer.
+estimate_flops = estimate_training_flops
+
 
 class EMA:
-    """
-    Exponential Moving Average for model weights
-    
-    Args:
-        model: PyTorch model to track
-        decay: EMA decay rate (higher = slower moving average)
-        device: Device to store EMA weights on
-    """
-    def __init__(self, model, decay=0.9999, device=None):
+    """Exponential moving average over trainable model parameters."""
+
+    def __init__(self, model: torch.nn.Module, decay: float = 0.9999, device=None):
         self.model = model
         self.decay = decay
-        self.device = device if device is not None else next(model.parameters()).device
-        self.shadow_params = [p.clone().detach().to(device) for p in model.parameters()]
+        trainable = self._trainable_params()
+        if not trainable:
+            raise ValueError("Model has no trainable parameters for EMA to track")
+        self.device = device if device is not None else trainable[0].device
+        self.shadow_params = [parameter.detach().clone().to(self.device) for parameter in trainable]
+        self.collected_params: list[torch.Tensor] = []
+
+    def _trainable_params(self) -> list[torch.nn.Parameter]:
+        return [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+
+    @torch.no_grad()
+    def update(self) -> None:
+        for shadow, parameter in zip(self.shadow_params, self._trainable_params(), strict=True):
+            shadow.lerp_(parameter.detach().to(shadow.device), 1.0 - self.decay)
+
+    @torch.no_grad()
+    def copy_from_model(self) -> None:
+        trainable = self._trainable_params()
+        if len(trainable) != len(self.shadow_params):
+            raise ValueError("EMA parameter count changed after initialization")
+        for shadow, parameter in zip(self.shadow_params, trainable, strict=True):
+            shadow.copy_(parameter.detach().to(device=shadow.device, dtype=shadow.dtype))
+
+    @torch.no_grad()
+    def store(self) -> None:
+        trainable = self._trainable_params()
+        self.collected_params = [parameter.detach().clone() for parameter in trainable]
+        for shadow, parameter in zip(self.shadow_params, trainable, strict=True):
+            parameter.copy_(shadow.to(device=parameter.device, dtype=parameter.dtype))
+
+    @torch.no_grad()
+    def restore(self) -> None:
+        if len(self.collected_params) != len(self.shadow_params):
+            raise RuntimeError("EMA.restore() called without a matching EMA.store()")
+        for collected, parameter in zip(self.collected_params, self._trainable_params(), strict=True):
+            parameter.copy_(collected.to(device=parameter.device, dtype=parameter.dtype))
         self.collected_params = []
-        
-    def update(self):
-        """Update EMA weights"""
-        for i, param in enumerate(self.model.parameters()):
-            # Use in-place operations to update shadow_params
-            self.shadow_params[i].copy_(
-                self.decay * self.shadow_params[i] + (1 - self.decay) * param.detach()
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "decay": self.decay,
+            "shadow_params": [parameter.detach().clone() for parameter in self.shadow_params],
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        shadows = state_dict["shadow_params"]
+        if len(shadows) != len(self.shadow_params):
+            raise ValueError(
+                f"EMA checkpoint has {len(shadows)} parameters; expected {len(self.shadow_params)}"
             )
-            
-    def store(self):
-        """Store current model parameters and replace with EMA weights"""
-        self.collected_params = [param.clone().detach() for param in self.model.parameters()]
-        for i, param in enumerate(self.model.parameters()):
-            param.data.copy_(self.shadow_params[i])
-    
-    def restore(self):
-        """Restore original model parameters"""
-        for i, param in enumerate(self.model.parameters()):
-            param.data.copy_(self.collected_params[i])
-            
-    
+        self.decay = float(state_dict.get("decay", self.decay))
+        for destination, source in zip(self.shadow_params, shadows, strict=True):
+            destination.copy_(source.to(device=destination.device, dtype=destination.dtype))
 
-def get_memory_usage(device=None):
-    """
-    Get current CPU and GPU memory usage.
-    
-    Args:
-        device: PyTorch device to check GPU memory for. If None, 
-               only CPU memory is returned.
-    
-    Returns:
-        String containing formatted memory usage information
-    """
-    memory_stats = {}
-    
-    try:
-        # CPU memory
-        process = psutil.Process(os.getpid())
-        cpu_memory = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
-        memory_stats['cpu_memory_gb'] = cpu_memory
-    except Exception as e:
-        memory_stats['cpu_memory_error'] = str(e)
-    
-    # GPU memory if CUDA is available
+
+def get_memory_stats(device: torch.device | None = None) -> dict[str, float]:
+    """Return process and CUDA memory statistics in GiB."""
+    stats = {"cpu_gb": psutil.Process(os.getpid()).memory_info().rss / (1024**3)}
     if torch.cuda.is_available():
-        try:
-            # Get device index if it's a CUDA device
-            device_idx = 0  # Default to first GPU
-            if device is not None and device.type == 'cuda' and hasattr(device, 'index'):
-                device_idx = device.index
-                
-            gpu_memory_allocated = torch.cuda.memory_allocated(device_idx) / (1024 * 1024 * 1024)  # Convert to GB
-            gpu_memory_reserved = torch.cuda.memory_reserved(device_idx) / (1024 * 1024 * 1024)  # Convert to GB
-            
-            memory_stats['gpu_allocated_gb'] = gpu_memory_allocated
-            memory_stats['gpu_reserved_gb'] = gpu_memory_reserved
-        except Exception as e:
-            memory_stats['gpu_memory_error'] = str(e)
-    
-    return format_memory_stats(memory_stats)
+        device_index = 0 if device is None or device.index is None else device.index
+        stats["gpu_allocated_gb"] = torch.cuda.memory_allocated(device_index) / (1024**3)
+        stats["gpu_reserved_gb"] = torch.cuda.memory_reserved(device_index) / (1024**3)
+    return stats
 
-def format_memory_stats(memory_stats):
-    """
-    Format memory statistics into a readable string.
-    
-    Args:
-        memory_stats: Dictionary containing memory statistics
-        
-    Returns:
-        Formatted string with memory information
-    """
-    result = []
-    
-    if 'cpu_memory_gb' in memory_stats:
-        result.append(f"CPU: {memory_stats['cpu_memory_gb']:.2f}GB")
-    elif 'cpu_memory_error' in memory_stats:
-        result.append(f"CPU Error: {memory_stats['cpu_memory_error']}")
-        
-    if 'gpu_allocated_gb' in memory_stats:
-        result.append(f"GPU: {memory_stats['gpu_allocated_gb']:.2f}GB (used) / {memory_stats['gpu_reserved_gb']:.2f}GB (reserved)")
-    elif 'gpu_memory_error' in memory_stats:
-        result.append(f"GPU Error: {memory_stats['gpu_memory_error']}")
-        
-    if not result:
-        return "Memory stats unavailable"
-        
-    return " | ".join(result)
 
-def calculate_mfu(flops_per_batch, batch_time, peak_flops):
-    """
-    Calculate Model FLOP Utilization (MFU).
-    
-    Args:
-        flops_per_batch: FLOPs per batch
-        batch_time: Time taken for processing one batch in seconds
-        peak_flops: Peak FLOPs capability of the hardware
-            
-    Returns:
-        float: MFU as a percentage
-    """
-    if flops_per_batch == 0 or batch_time == 0:
+def format_memory_stats(stats: dict[str, float]) -> str:
+    values = [f"CPU: {stats['cpu_gb']:.2f} GiB"] if "cpu_gb" in stats else []
+    if "gpu_allocated_gb" in stats:
+        values.append(
+            f"GPU: {stats['gpu_allocated_gb']:.2f} GiB allocated / "
+            f"{stats['gpu_reserved_gb']:.2f} GiB reserved"
+        )
+    return " | ".join(values) if values else "Memory stats unavailable"
+
+
+def get_memory_usage(device: torch.device | None = None) -> str:
+    return format_memory_stats(get_memory_stats(device))
+
+
+def calculate_mfu(flops_per_batch: float, batch_time: float, peak_flops: float) -> float:
+    """Calculate training MFU as a percentage from forward-plus-backward FLOPs."""
+    if flops_per_batch <= 0.0 or batch_time <= 0.0 or peak_flops <= 0.0:
         return 0.0
-            
-    achieved_flops = flops_per_batch / batch_time  # FLOPs/second achieved
-    mfu = (achieved_flops / peak_flops) * 100  # Convert to percentage
-    return mfu 
+    return 100.0 * flops_per_batch / batch_time / peak_flops
