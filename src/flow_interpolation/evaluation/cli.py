@@ -67,7 +67,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--num-intervals", type=int, default=10)
     parser.add_argument("--start-index", type=int, default=512)
-    parser.add_argument("--training-frame-dt", type=float, default=0.25)
+    parser.add_argument("--training-frame-dt", type=float, default=0.1)
     parser.add_argument("--high-frame-dt", type=float, default=0.02)
     parser.add_argument(
         "--training-color-walk-std",
