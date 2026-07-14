@@ -8,7 +8,7 @@ Place these files in the repository root on the `slerp_interp` branch. They impo
 - `eval_common.py`: checkpoint loading, ODE integration, epsilon-boundary handling, encoding/decoding, and metrics.
 - `eval_data.py`: synthetic sequence creation, color-walk scaling, and explicit cadence resolution.
 - `eval_geometry.py`: LERP, ISCS-style SLERP, radius-preserving SLERP, and generalized hyperspherical SQUAD.
-- `eval_roundtrip.py`: data → noise → data′ and noise → data → noise′ cycle tests.
+- `eval_roundtrip.py`: bidirectional cycle tests, image-boundary sweeps, scale-normalized errors, encoded-vs-random latent comparisons, and batch-consistency checks.
 - `eval_geodesic.py`: latent-geodesic errors against the encoded high-rate ground-truth trajectory.
 - `eval_latent_interpolation.py`: endpoint inversion, SLERP/SQUAD interpolation, and deterministic decoding.
 - `eval_data_consistency.py`: ISCS-inspired rectified-flow posterior sampling with hard temporal measurement consistency.
@@ -75,10 +75,40 @@ Outputs are written under `outputs/eval` by default.
 
 For data → noise → data′, two errors are reported:
 
-1. `cycle_at_data_eps`: compares the decoded result to the exact perturbed input at `data_eps`; this isolates ODE/model cycle fidelity.
+1. `cycle_at_data_eps`: compares the decoded result to the exact perturbed input at `data_eps`; this isolates ODE cycle fidelity.
 2. `clean_endpoint_estimate`: applies the rectified-flow endpoint identity `x0_hat = x_t - t v_theta(x_t,t)` and compares with the original clean image.
 
 For noise → data → noise′, the decoded `data_eps` state is re-encoded directly, without a fresh epsilon perturbation.
+
+The suite now also reports:
+
+- `encoded_data_latent_to_data_to_latent`: the noise-first composition evaluated on latents that are known to lie in the numerical image of the encoder. Comparing this with a fresh Gaussian cycle distinguishes a generic integrator failure from a latent-distribution/conditioning effect.
+- `image_boundary_sweep`: cycles random Gaussian anchors through 90%, 99%, 99.9%, and 100% of the configured noise→image path. A depth of 100% reaches `data_time`; it reaches mathematical `t=0` only when `--data-eps 0` is used.
+- `batch_consistency`: evaluates the same anchor alone and inside larger fixed batches, reporting differences in the initial vector field, forward endpoint, and completed cycle.
+- `solver_step_sweep`: optional convergence measurements when `--roundtrip-step-counts` is supplied.
+
+Every principal error now includes scale-normalized quantities:
+
+```text
+rmse_over_target_std
+mse_over_target_variance
+rmse_over_target_rms
+mae_over_target_mean_abs
+```
+
+`RMSE/std` and `MSE/variance` test whether absolute cycle errors simply track the scale of the state distribution. `RMSE/RMS` is also included because it remains well defined for non-zero-mean states and is the global relative-L2 error. Target statistics include the fraction of channel/pixel locations whose standard deviation across the evaluated frames is below `1e-4`, `1e-3`, and `1e-2`, which helps identify nearly deterministic image regions.
+
+Example:
+
+```bash
+python eval.py roundtrip \
+  --roundtrip-image-depths 0.9,0.99,0.999,1.0 \
+  --roundtrip-batch-sizes 1,2,4,8,16,32 \
+  --roundtrip-step-counts 64,128,256,512 \
+  --save-tensors
+```
+
+The step sweep is omitted by default because it substantially increases runtime.
 
 ## Latent-geodesic metrics
 
@@ -112,12 +142,17 @@ x_next = (1 - t_next) * x0_dc + t_next * z_mix
 
 ## Suggested first runs
 
-Use Heun, then sweep integration resolution:
+Use Heun and run the boundary/batch diagnostics first:
 
 ```bash
 python eval.py roundtrip --solver heun --ode-steps 128
-python eval.py roundtrip --solver heun --ode-steps 256
-python eval.py roundtrip --solver heun --ode-steps 512
+```
+
+Then request a solver convergence sweep in a single run:
+
+```bash
+python eval.py roundtrip --solver heun --ode-steps 128 \
+  --roundtrip-step-counts 64,128,256,512
 ```
 
 After cycle fidelity is acceptable, compare:

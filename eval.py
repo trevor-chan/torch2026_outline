@@ -17,6 +17,10 @@ from eval_data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_seque
 from eval_data_consistency import run_data_consistency_evaluation
 from eval_endpoint_bridge import run_endpoint_bridge_evaluation
 from eval_geodesic import run_latent_geodesic_evaluation
+from eval_hybrid_latent_interpolation import (
+    IMAGE_INTERPOLATION_METHODS,
+    run_hybrid_latent_interpolation_evaluation,
+)
 from eval_latent_interpolation import run_latent_interpolation_evaluation
 from eval_roundtrip import run_roundtrip_evaluation
 
@@ -33,6 +37,16 @@ def csv_float_list(value: str) -> list[float]:
 
 def csv_list(value: str) -> list[str]:
     values = [item.strip() for item in value.split(",") if item.strip()]
+    if not values:
+        raise argparse.ArgumentTypeError("Expected at least one comma-separated value.")
+    return values
+
+
+def csv_int_list(value: str) -> list[int]:
+    try:
+        values = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Expected comma-separated integer values.") from error
     if not values:
         raise argparse.ArgumentTypeError("Expected at least one comma-separated value.")
     return values
@@ -123,6 +137,30 @@ def build_parser() -> argparse.ArgumentParser:
     roundtrip = subparsers.add_parser("roundtrip", parents=[common])
     roundtrip.add_argument("--roundtrip-samples", type=int, default=32)
     roundtrip.add_argument(
+        "--roundtrip-image-depths",
+        type=csv_float_list,
+        default=[0.9, 0.99, 0.999, 1.0],
+        help=(
+            "Comma-separated fractions of the noise->data integration path for the "
+            "image-boundary sweep. Defaults to 90%,99%,99.9%,100%."
+        ),
+    )
+    roundtrip.add_argument(
+        "--roundtrip-batch-sizes",
+        type=csv_int_list,
+        default=[1, 2, 4, 8, 16, 32],
+        help="Comma-separated batch sizes for the batch-composition sanity check.",
+    )
+    roundtrip.add_argument(
+        "--roundtrip-step-counts",
+        type=csv_int_list,
+        default=None,
+        help=(
+            "Optional fixed-step convergence sweep, for example 64,128,256,512. "
+            "Omitted by default because it adds substantial runtime."
+        ),
+    )
+    roundtrip.add_argument(
         "--boundary-noise-mode", choices=("shared", "independent"), default="shared"
     )
     roundtrip.add_argument("--save-tensors", action="store_true")
@@ -134,6 +172,47 @@ def build_parser() -> argparse.ArgumentParser:
     latent = subparsers.add_parser("latent", parents=[common])
     add_geometry_arguments(latent)
     add_video_arguments(latent)
+
+    hybrid = subparsers.add_parser(
+        "hybrid",
+        parents=[common],
+        help="Mix image interpolation and a SQUAD noise path at an intermediate RF time.",
+    )
+    hybrid.add_argument(
+        "--mix-times",
+        type=csv_float_list,
+        default=[0.25, 0.5, 0.75, 0.9],
+        help=(
+            "Comma-separated RF times. Each start state is "
+            "x_t=(1-t)*x_image+t*z_squad, then decoded from t to data_time."
+        ),
+    )
+    hybrid.add_argument(
+        "--image-methods",
+        type=csv_list,
+        default=["linear"],
+        help="Comma-separated subset of linear,smoothstep,catmull-rom.",
+    )
+    hybrid.add_argument("--slerp-mode", choices=("iscs", "radius-lerp"), default="iscs")
+    hybrid.add_argument(
+        "--boundary-noise-mode", choices=("shared", "independent"), default="shared"
+    )
+    hybrid.add_argument(
+        "--hard-keyframes",
+        action="store_true",
+        help="Replace generated keyframe outputs with the exact observed images.",
+    )
+    hybrid.add_argument(
+        "--allow-image-overshoot",
+        action="store_true",
+        help="Do not clamp cubic image interpolation to [0,1] before hybrid composition.",
+    )
+    hybrid.add_argument(
+        "--no-start-state-comparison",
+        action="store_true",
+        help="Skip tracing the ordinary SQUAD ODE path to each mix time.",
+    )
+    add_video_arguments(hybrid)
 
     bridge = subparsers.add_parser("bridge", parents=[common])
     bridge.add_argument(
@@ -190,6 +269,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_geometry_arguments(all_parser)
     add_video_arguments(all_parser)
     all_parser.add_argument("--roundtrip-samples", type=int, default=32)
+    all_parser.add_argument(
+        "--roundtrip-image-depths",
+        type=csv_float_list,
+        default=[0.9, 0.99, 0.999, 1.0],
+    )
+    all_parser.add_argument(
+        "--roundtrip-batch-sizes",
+        type=csv_int_list,
+        default=[1, 2, 4, 8, 16, 32],
+    )
+    all_parser.add_argument(
+        "--roundtrip-step-counts",
+        type=csv_int_list,
+        default=None,
+    )
     all_parser.add_argument(
         "--noise-controls", type=csv_list, default=["independent", "slerp"]
     )
@@ -266,6 +360,17 @@ def main() -> None:
 
     if args.command in {"geodesic", "latent", "all"}:
         validate_methods(args.methods)
+    if args.command == "hybrid":
+        unknown_image_methods = set(args.image_methods) - IMAGE_INTERPOLATION_METHODS
+        if unknown_image_methods:
+            raise ValueError(
+                f"Unknown image interpolation method(s): {sorted(unknown_image_methods)}"
+            )
+        if any(value < flow.data_time or value > flow.noise_time for value in args.mix_times):
+            raise ValueError(
+                "Every hybrid mix time must be inside the configured flow interval "
+                f"[{flow.data_time}, {flow.noise_time}]"
+            )
     if args.command in {"dc", "all"}:
         validate_noise_controls(args.noise_controls)
     if args.command == "bridge":
@@ -287,6 +392,9 @@ def main() -> None:
             seed=args.seed + 101,
             output_json=str(roundtrip_dir / "metrics.json"),
             output_tensors=str(roundtrip_dir / "tensors.pt") if args.save_tensors else None,
+            image_depths=args.roundtrip_image_depths,
+            batch_sizes=args.roundtrip_batch_sizes,
+            step_counts=args.roundtrip_step_counts,
         )
 
     if args.command in {"geodesic", "all"}:
@@ -316,6 +424,28 @@ def main() -> None:
             boundary_noise_mode=args.boundary_noise_mode,
             seed=args.seed + 303,
             output_dir=str(output_root / "latent"),
+            video_fps=args.video_fps,
+            display_scale=args.display_scale,
+            gap=args.gap,
+            residual_scale=args.residual_scale,
+            save_tensors=args.save_tensors,
+        )
+
+    if args.command == "hybrid":
+        run_hybrid_latent_interpolation_evaluation(
+            model=model,
+            device=device,
+            sequence=sequence,
+            flow=flow,
+            mix_times=args.mix_times,
+            image_methods=args.image_methods,
+            slerp_mode=args.slerp_mode,
+            boundary_noise_mode=args.boundary_noise_mode,
+            seed=args.seed + 353,
+            hard_keyframes=args.hard_keyframes,
+            clamp_image_interpolation=not args.allow_image_overshoot,
+            compare_start_states=not args.no_start_state_comparison,
+            output_dir=str(output_root / "hybrid_latent_interpolation"),
             video_fps=args.video_fps,
             display_scale=args.display_scale,
             gap=args.gap,
