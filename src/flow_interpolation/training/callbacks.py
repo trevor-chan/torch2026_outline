@@ -24,6 +24,20 @@ def unpack_batch(batch):
     return batch, None
 
 
+def center_frame_batch(
+    data: torch.Tensor,
+    conditioning: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Select the center image when a loader yields ordered triplets."""
+    if data.ndim != 5 or data.shape[1] != 3:
+        return data, conditioning
+    data = data[:, 1]
+    if conditioning is not None and conditioning.shape[0] == data.shape[0]:
+        if conditioning.ndim >= 2 and conditioning.shape[1] == 3:
+            conditioning = conditioning[:, 1]
+    return data, conditioning
+
+
 @dataclass
 class ValidationCallback:
     model: nn.Module
@@ -43,6 +57,7 @@ class ValidationCallback:
         was_training = self.model.training
         self.model.eval()
         total_loss = 0.0
+        metric_sum = None
         data_iter = iter(dataloader)
         try:
             with torch.no_grad():
@@ -60,16 +75,44 @@ class ValidationCallback:
                         dtype=self.amp_dtype,
                         enabled=self.amp_dtype is not None,
                     ):
-                        loss = self.criterion(self.model, data, conditioning)
+                        if hasattr(self.criterion, "loss_and_metrics"):
+                            loss, metrics = self.criterion.loss_and_metrics(
+                                self.model, data, conditioning
+                            )
+                        else:
+                            loss = self.criterion(self.model, data, conditioning)
+                            metrics = loss.reshape(1)
                     total_loss += loss.item()
+                    metric_sum = (
+                        metrics.detach()
+                        if metric_sum is None
+                        else metric_sum + metrics.detach()
+                    )
         finally:
             self.model.train(was_training)
 
         average_loss = total_loss / self.num_iterations
         if self.log_enabled:
-            print(f"Validation Loss: {average_loss:.4f}")
+            message = f"Validation Loss: {average_loss:.4f}"
+            metric_names = getattr(self.criterion, "metric_names", ())
+            metric_values = dict(
+                zip(metric_names, (metric_sum / self.num_iterations).tolist(), strict=False)
+            )
+            if "flow_matching_loss" in metric_values:
+                message += (
+                    f", Flow: {metric_values['flow_matching_loss']:.4f}, "
+                    f"Acceleration: {metric_values['acceleration_loss']:.4f}"
+                )
+            print(message)
         if self.writer is not None:
             self.writer.add_scalar("validation/loss", average_loss, training_step)
+            metric_names = getattr(self.criterion, "metric_names", ("objective_loss",))
+            for name, value in zip(
+                metric_names,
+                (metric_sum / self.num_iterations).tolist(),
+                strict=False,
+            ):
+                self.writer.add_scalar(f"validation/{name}", value, training_step)
             self.writer.flush()
         return average_loss
 
@@ -96,6 +139,7 @@ class RectifiedFlowSampler:
             return
 
         data, conditioning = unpack_batch(next(iter(dataloader)))
+        data, conditioning = center_frame_batch(data, conditioning)
         data = data.to(self.device)
         batch_size = data.shape[0]
         x_t = torch.randn_like(data)

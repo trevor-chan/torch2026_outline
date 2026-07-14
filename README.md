@@ -79,6 +79,41 @@ MFU uses measured forward-plus-backward model FLOPs and a per-device peak suppli
 by `--peak-tflops` (91.1 by default). TensorBoard records loss, validation loss,
 gradient norms, learning rate, step time, throughput, MFU, memory, and sample images.
 
+### Latent acceleration regularization
+
+Acceleration regularization is opt-in, so existing training runs retain the ordinary
+independent-frame rectified-flow objective. A reasonable first low-weight sweep is:
+
+```bash
+python -m flow_interpolation train \
+  --run-name acceleration-1e-3 \
+  --acceleration-weight 1e-3 \
+  --acceleration-frame-stride 1 \
+  --acceleration-ode-steps 1
+```
+
+When enabled, the loader samples equally spaced ordered frame triplets. Ordinary flow
+matching is still evaluated on only the center frame. The three frames are separately
+encoded from the epsilon data boundary toward the noise boundary, with gradients
+through the integration, and contribute
+
+```text
+acceleration_loss = mean((z_next - 2 z_center + z_previous)^2)
+total_loss = flow_matching_loss + acceleration_weight * acceleration_loss
+```
+
+One Euler step is the inexpensive endpoint estimate `z_hat = x_eps + Delta t v(x_eps,
+t_eps)`. Increase `--acceleration-ode-steps` for a closer approximation to the full
+encoder, or select `--acceleration-solver heun`; these settings add substantial compute
+and activation memory. For `S` integration steps, the approximate model-evaluation
+cost per training item is `1 + 3S` with Euler and `1 + 6S` with Heun.
+
+TensorBoard separates the total, flow-matching, raw acceleration, and weighted
+acceleration losses. It also records encoded value mean/std, radius mean/std, and the
+radius-to-expected-Gaussian-radius ratio so a smoother but collapsed or rescaled
+latent map is visible. The raw finite difference is intentionally Euclidean and is
+not divided by frame spacing; compare runs at the same `--acceleration-frame-stride`.
+
 Evaluation is organized by experiment. For example:
 
 ```bash

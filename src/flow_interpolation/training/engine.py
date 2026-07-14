@@ -59,7 +59,7 @@ class Trainer:
         self,
         data: torch.Tensor,
         conditioning: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.optimizer.zero_grad(set_to_none=True)
         data = data.to(self.device)
         if conditioning is not None:
@@ -70,7 +70,13 @@ class Trainer:
             dtype=self.amp_dtype,
             enabled=self.amp_dtype is not None,
         ):
-            loss = self.criterion(self.model, data, conditioning)
+            if hasattr(self.criterion, "loss_and_metrics"):
+                loss, loss_metrics = self.criterion.loss_and_metrics(
+                    self.model, data, conditioning
+                )
+            else:
+                loss = self.criterion(self.model, data, conditioning)
+                loss_metrics = loss.reshape(1)
 
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -82,7 +88,7 @@ class Trainer:
         self.optimizer.step()
         if self.ema is not None:
             self.ema.update()
-        return loss.detach(), grad_norm.detach()
+        return loss.detach(), grad_norm.detach(), loss_metrics.detach()
 
     @staticmethod
     def _unpack_batch(batch):
@@ -105,6 +111,7 @@ class Trainer:
                 conditioning,
                 device=self.device,
                 amp_dtype=self.amp_dtype,
+                criterion=self.criterion,
             )
         except Exception as error:
             print(f"Could not estimate training FLOPs: {error}")
@@ -121,6 +128,7 @@ class Trainer:
         loss_sum: torch.Tensor,
         grad_norm_sum: torch.Tensor,
         grad_norm_max: torch.Tensor,
+        loss_metric_sum: torch.Tensor,
         steps: int,
         elapsed: float,
     ) -> None:
@@ -131,6 +139,7 @@ class Trainer:
         mfu = calculate_mfu(flops, average_step_time, self.peak_flops)
         average_loss = loss_sum.item() / steps
         average_grad_norm = grad_norm_sum.item() / steps
+        average_loss_metrics = loss_metric_sum.float().cpu() / steps
         max_grad_norm = grad_norm_max.item()
         learning_rate = self.optimizer.param_groups[0]["lr"]
         memory_stats = get_memory_stats(self.device) if self.profile_memory else None
@@ -144,6 +153,15 @@ class Trainer:
             )
             if memory_stats:
                 message += f", Memory: {format_memory_stats(memory_stats)}"
+            metric_names = getattr(self.criterion, "metric_names", ())
+            metric_values = dict(
+                zip(metric_names, average_loss_metrics.tolist(), strict=False)
+            )
+            if "flow_matching_loss" in metric_values:
+                message += (
+                    f", Flow: {metric_values['flow_matching_loss']:.4f}, "
+                    f"Acceleration: {metric_values['acceleration_loss']:.4f}"
+                )
             print(message)
 
         if self.writer is not None:
@@ -151,6 +169,13 @@ class Trainer:
             self.writer.add_scalar("train/grad_norm_mean", average_grad_norm, step)
             self.writer.add_scalar("train/grad_norm_max", max_grad_norm, step)
             self.writer.add_scalar("train/learning_rate", learning_rate, step)
+            metric_names = getattr(self.criterion, "metric_names", ("objective_loss",))
+            for name, value in zip(
+                metric_names,
+                average_loss_metrics.tolist(),
+                strict=False,
+            ):
+                self.writer.add_scalar(f"train/{name}", value, step)
             self.writer.add_scalar("performance/steps_per_second", iterations_per_second, step)
             self.writer.add_scalar("performance/step_time_ms", average_step_time * 1_000.0, step)
             self.writer.add_scalar("performance/achieved_tflops", achieved_tflops, step)
@@ -172,6 +197,7 @@ class Trainer:
         loss_sum = None
         grad_norm_sum = None
         grad_norm_max = None
+        loss_metric_sum = None
         last_log_time = time.perf_counter()
 
         while self.max_steps is None or step < self.max_steps:
@@ -182,7 +208,7 @@ class Trainer:
                 data, conditioning = self._unpack_batch(next(data_iter))
 
             self.model.train()
-            loss, grad_norm = self.train_step(data, conditioning)
+            loss, grad_norm, loss_metrics = self.train_step(data, conditioning)
             step += 1
             self.current_step = step
             steps_since_log += 1
@@ -192,6 +218,11 @@ class Trainer:
                 grad_norm.clone()
                 if grad_norm_max is None
                 else torch.maximum(grad_norm_max, grad_norm)
+            )
+            loss_metric_sum = (
+                loss_metrics.clone()
+                if loss_metric_sum is None
+                else loss_metric_sum + loss_metrics
             )
 
             should_log = step % self.log_interval == 0
@@ -204,6 +235,7 @@ class Trainer:
                     loss_sum=loss_sum,
                     grad_norm_sum=grad_norm_sum,
                     grad_norm_max=grad_norm_max,
+                    loss_metric_sum=loss_metric_sum,
                     steps=steps_since_log,
                     elapsed=elapsed,
                 )
@@ -219,6 +251,7 @@ class Trainer:
                 loss_sum = None
                 grad_norm_sum = None
                 grad_norm_max = None
+                loss_metric_sum = None
                 last_log_time = time.perf_counter()
             else:
                 callback_seconds += callback_elapsed

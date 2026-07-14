@@ -12,7 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from flow_interpolation.data import BouncingBallVideoDataset
+from flow_interpolation.data import BouncingBallVideoDataset, OrderedTripletDataset
 from flow_interpolation.models import TransformerDiffusionModel
 from flow_interpolation.training.callbacks import (
     CheckpointCallback,
@@ -69,6 +69,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-amp", action="store_true", help="disable BF16 autocast")
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--device", default="auto")
+
+    acceleration = parser.add_argument_group("latent acceleration regularization")
+    acceleration.add_argument(
+        "--acceleration-weight",
+        type=float,
+        default=0.0,
+        help="weight on the raw terminal-latent second-difference loss; 0 disables it",
+    )
+    acceleration.add_argument(
+        "--acceleration-frame-stride",
+        type=int,
+        default=1,
+        help="spacing between frames in each ordered training triplet",
+    )
+    acceleration.add_argument(
+        "--acceleration-ode-steps",
+        type=int,
+        default=1,
+        help="differentiable data-to-noise steps; 1 Euler step is the cheap endpoint proxy",
+    )
+    acceleration.add_argument(
+        "--acceleration-solver",
+        choices=("euler", "heun"),
+        default="euler",
+    )
+    acceleration.add_argument("--acceleration-data-eps", type=float, default=1e-3)
+    acceleration.add_argument("--acceleration-noise-eps", type=float, default=1e-3)
 
     parser.add_argument("--dataset-size", type=int, default=50_000)
     parser.add_argument("--val-size", type=int, default=2_000)
@@ -181,6 +208,31 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--val-steps must be positive")
     if args.peak_tflops <= 0:
         parser.error("--peak-tflops must be positive")
+    if args.acceleration_weight < 0.0:
+        parser.error("--acceleration-weight must be non-negative")
+    if args.acceleration_frame_stride <= 0:
+        parser.error("--acceleration-frame-stride must be positive")
+    if args.acceleration_ode_steps <= 0:
+        parser.error("--acceleration-ode-steps must be positive")
+    if args.acceleration_weight > 0.0 and min(args.dataset_size, args.val_size) <= (
+        2 * args.acceleration_frame_stride
+    ):
+        parser.error(
+            "training and validation datasets must each contain more than "
+            "2 * acceleration-frame-stride frames"
+        )
+    if args.acceleration_weight > 0.0 and (
+        args.drop_rate > 0.0 or args.attn_drop_rate > 0.0
+    ):
+        parser.error(
+            "acceleration regularization requires --drop-rate 0 and "
+            "--attn-drop-rate 0 so stochastic masks do not create false curvature"
+        )
+    if not 0.0 <= args.acceleration_data_eps < 1.0 - args.acceleration_noise_eps <= 1.0:
+        parser.error(
+            "acceleration endpoint epsilons must satisfy "
+            "0 <= data_eps < 1 - noise_eps <= 1"
+        )
 
     torch.manual_seed(args.seed)
     torch.set_float32_matmul_precision("high")
@@ -235,6 +287,15 @@ def main(argv: list[str] | None = None) -> None:
         return_conditioning=False,
         write_video=False,
     )
+    if args.acceleration_weight > 0.0:
+        train_dataset = OrderedTripletDataset(
+            train_dataset,
+            frame_stride=args.acceleration_frame_stride,
+        )
+        val_dataset = OrderedTripletDataset(
+            val_dataset,
+            frame_stride=args.acceleration_frame_stride,
+        )
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -250,7 +311,13 @@ def main(argv: list[str] | None = None) -> None:
         pin_memory=device.type == "cuda",
     )
 
-    criterion = RectifiedFlowLoss()
+    criterion = RectifiedFlowLoss(
+        acceleration_weight=args.acceleration_weight,
+        acceleration_ode_steps=args.acceleration_ode_steps,
+        acceleration_solver=args.acceleration_solver,
+        data_time=args.acceleration_data_eps,
+        noise_time=1.0 - args.acceleration_noise_eps,
+    )
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     ema = EMA(model, decay=args.ema_decay, device=device)
     start_step = 0
@@ -287,6 +354,19 @@ def main(argv: list[str] | None = None) -> None:
                 "dataset_video": str(dataset_video),
                 "start_step": start_step,
                 "full_state_resume": resume_result.full_state if resume_result else None,
+                "training_batch_semantics": (
+                    "ordered_triplets_with_center_frame_flow_matching"
+                    if args.acceleration_weight > 0.0
+                    else "independent_frames"
+                ),
+                "model_evaluations_per_training_item": (
+                    1
+                    + 3
+                    * args.acceleration_ode_steps
+                    * (2 if args.acceleration_solver == "heun" else 1)
+                    if args.acceleration_weight > 0.0
+                    else 1
+                ),
             },
             resumed_from=resume_checkpoint,
         )

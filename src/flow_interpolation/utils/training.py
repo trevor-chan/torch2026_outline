@@ -52,6 +52,7 @@ def estimate_training_flops(
     *,
     device: torch.device | None = None,
     amp_dtype: torch.dtype | None = None,
+    criterion: torch.nn.Module | None = None,
 ) -> float:
     """Estimate model forward and backward FLOPs for one training batch."""
     try:
@@ -62,7 +63,6 @@ def estimate_training_flops(
             data = data.to(device)
             if conditioning is not None:
                 conditioning = conditioning.to(device)
-        time = torch.rand(data.shape[0], device=data.device, dtype=data.dtype)
         was_training = profile_model.training
         profile_model.train()
         profile_model.zero_grad(set_to_none=True)
@@ -72,7 +72,12 @@ def estimate_training_flops(
                 dtype=amp_dtype,
                 enabled=amp_dtype is not None,
             ), FlopCounterMode(display=False) as flop_counter:
-                profile_model(data, conditioning, time).sum().backward()
+                if criterion is None:
+                    time = torch.rand(data.shape[0], device=data.device, dtype=data.dtype)
+                    loss = profile_model(data, conditioning, time).sum()
+                else:
+                    loss = criterion(profile_model, data, conditioning)
+                loss.backward()
             flops = float(flop_counter.get_total_flops())
         finally:
             profile_model.zero_grad(set_to_none=True)
