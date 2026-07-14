@@ -8,7 +8,7 @@ import torch
 from flow_interpolation.data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
 from flow_interpolation.evaluation.experiments.data_consistency import run_data_consistency_evaluation
 from flow_interpolation.evaluation.experiments.endpoint_bridge import run_endpoint_bridge_evaluation
-from flow_interpolation.evaluation.experiments.geodesic import run_latent_geodesic_evaluation
+from flow_interpolation.evaluation.experiments.trajectory import run_trajectory_analysis
 from flow_interpolation.evaluation.experiments.hybrid import (
     IMAGE_INTERPOLATION_METHODS,
     run_hybrid_latent_interpolation_evaluation,
@@ -117,11 +117,41 @@ def add_geometry_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_video_arguments(parser: argparse.ArgumentParser) -> None:
+def add_trajectory_arguments(parser: argparse.ArgumentParser) -> None:
+    add_geometry_arguments(parser)
+    parser.add_argument(
+        "--keyframe-strides",
+        type=csv_int_list,
+        default=None,
+        help=(
+            "Dense-frame strides for the keyframe-density sweep. By default uses "
+            "half, equal, and twice the configured endpoint stride."
+        ),
+    )
+    parser.add_argument(
+        "--plot-paths",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save PCA path, residual, geometry, and density-summary plots.",
+    )
+    parser.add_argument(
+        "--decode-paths",
+        action="store_true",
+        help="Decode each latent path and save image-space comparison videos and metrics.",
+    )
+    add_render_arguments(parser)
+    parser.add_argument("--save-tensors", action="store_true")
+
+
+def add_render_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--video-fps", type=float, default=10.0)
     parser.add_argument("--display-scale", type=int, default=8)
     parser.add_argument("--gap", type=int, default=2)
     parser.add_argument("--residual-scale", type=float, default=4.0)
+
+
+def add_video_arguments(parser: argparse.ArgumentParser) -> None:
+    add_render_arguments(parser)
     parser.add_argument("--save-tensors", action="store_true")
 
 
@@ -166,9 +196,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     roundtrip.add_argument("--save-tensors", action="store_true")
 
-    geodesic = subparsers.add_parser("geodesic", parents=[common])
-    add_geometry_arguments(geodesic)
-    geodesic.add_argument("--save-tensors", action="store_true")
+    trajectory = subparsers.add_parser(
+        "trajectory",
+        aliases=["geodesic"],
+        parents=[common],
+        help="Compare dense encoded trajectories with sparse latent interpolators.",
+    )
+    add_trajectory_arguments(trajectory)
 
     latent = subparsers.add_parser("latent", parents=[common])
     add_geometry_arguments(latent)
@@ -268,7 +302,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_parser = subparsers.add_parser("all", parents=[common])
     add_geometry_arguments(all_parser)
+    all_parser.add_argument("--keyframe-strides", type=csv_int_list, default=None)
     add_video_arguments(all_parser)
+    all_parser.add_argument(
+        "--plot-paths", action=argparse.BooleanOptionalAction, default=True
+    )
+    all_parser.add_argument("--decode-paths", action="store_true")
     all_parser.add_argument("--roundtrip-samples", type=int, default=32)
     all_parser.add_argument(
         "--roundtrip-image-depths",
@@ -359,7 +398,7 @@ def main(argv: list[str] | None = None) -> None:
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    if args.command in {"geodesic", "latent", "all"}:
+    if args.command in {"trajectory", "geodesic", "latent", "all"}:
         validate_methods(args.methods)
     if args.command == "hybrid":
         unknown_image_methods = set(args.image_methods) - IMAGE_INTERPOLATION_METHODS
@@ -398,9 +437,9 @@ def main(argv: list[str] | None = None) -> None:
             step_counts=args.roundtrip_step_counts,
         )
 
-    if args.command in {"geodesic", "all"}:
-        geodesic_dir = output_root / "geodesic"
-        run_latent_geodesic_evaluation(
+    if args.command in {"trajectory", "geodesic", "all"}:
+        trajectory_dir = output_root / "trajectory"
+        run_trajectory_analysis(
             model=model,
             device=device,
             sequence=sequence,
@@ -409,9 +448,16 @@ def main(argv: list[str] | None = None) -> None:
             slerp_mode=args.slerp_mode,
             boundary_noise_mode=args.boundary_noise_mode,
             seed=args.seed + 202,
-            output_json=str(geodesic_dir / "metrics.json"),
-            output_csv=str(geodesic_dir / "per_frame.csv"),
-            output_tensors=str(geodesic_dir / "tensors.pt") if args.save_tensors else None,
+            output_json=str(trajectory_dir / "metrics.json"),
+            output_csv=str(trajectory_dir / "per_frame.csv"),
+            output_tensors=str(trajectory_dir / "tensors.pt") if args.save_tensors else None,
+            keyframe_strides=args.keyframe_strides,
+            plot_paths=args.plot_paths,
+            decode_paths=args.decode_paths,
+            video_fps=args.video_fps,
+            display_scale=args.display_scale,
+            gap=args.gap,
+            residual_scale=args.residual_scale,
         )
 
     if args.command in {"latent", "all"}:

@@ -8,7 +8,7 @@ sequence construction and observation masks live in `data/`.
 
 - `evaluation/cli.py`: command parsing and experiment dispatch.
 - `evaluation/experiments/roundtrip.py`: cycle, boundary, and batch diagnostics.
-- `evaluation/experiments/geodesic.py`: errors against encoded high-rate trajectories.
+- `evaluation/experiments/trajectory.py`: dense encoded-trajectory and density diagnostics.
 - `evaluation/experiments/latent.py`: endpoint inversion and latent interpolation.
 - `evaluation/experiments/data_consistency.py`: sampling with hard temporal measurements.
 - `evaluation/experiments/endpoint_bridge.py`: stochastic endpoint-conditioned bridges.
@@ -19,6 +19,8 @@ sequence construction and observation masks live in `data/`.
 - `utils/flow.py`: model loading, ODE integration, endpoint prediction, and chunking.
 - `utils/interpolation.py`: LERP, SLERP, and generalized hyperspherical SQUAD.
 - `utils/metrics.py`: image/latent metrics and JSON result serialization.
+- `utils/trajectory.py`: subspace, differential-geometry, and path-comparison metrics.
+- `utils/trajectory_visualization.py`: static path, residual, and metric plots.
 - `utils/visualization.py`: comparison panels and MP4 writing.
 - `data/sequences.py`: sparse sequence construction, cadence, and observation masks.
 
@@ -68,8 +70,10 @@ before ordinary data-to-noise inversion. Round-trip cycle tests do **not** injec
 # Both cycle directions
 python -m flow_interpolation eval roundtrip --checkpoint bouncing_ball_diffusion_ema.pth
 
-# Compare encoded ground-truth latents with SLERP and SQUAD paths
-python -m flow_interpolation eval geodesic --methods slerp,squad
+# Compare the dense encoded reference with sparse interpolation paths
+python -m flow_interpolation eval trajectory \
+  --methods lerp,slerp,squad \
+  --keyframe-strides 6,13,26
 
 # Existing endpoint-latent interpolation, now with optional SQUAD
 python -m flow_interpolation eval latent --methods slerp,squad
@@ -122,17 +126,39 @@ python -m flow_interpolation eval roundtrip \
 
 The step sweep is omitted by default because it substantially increases runtime.
 
-## Latent-geodesic metrics
+## Encoded-trajectory diagnostics
 
-The full high-rate ground-truth sequence is encoded with one shared epsilon-boundary draw by default. For every frame, the CSV records:
+The full high-rate ground-truth sequence is encoded with one shared epsilon-boundary
+draw by default. This dense encoded path is an empirical oracle for the observed
+process, not a claim about the globally optimal path through noise space. The
+`trajectory` command, with `geodesic` retained as an alias, reports:
 
-- relative L2 error,
-- latent RMSE,
-- cosine similarity,
-- angular error in degrees,
-- relative radius error.
+- LERP, SLERP, and SQUAD error by frame, missing frame, and interpolation coordinate;
+- residual energy outside each two-endpoint plane;
+- residual energy outside the local four-keyframe subspace available to SQUAD;
+- radius, radial speed, angular speed, and radial/angular step fractions;
+- latent speed, acceleration, turning angle, and discrete curvature;
+- interpolator tangent alignment and speed error;
+- a keyframe-density sweep controlled by `--keyframe-strides`.
 
-Summaries are reported separately for all frames and missing/intermediate frames.
+The JSON contains aggregate and interpolation-coordinate summaries. The CSV contains
+all per-frame measurements, and `--save-tensors` retains the encoded reference,
+interpolated paths, and raw diagnostic tensors. When no stride list is supplied, the
+command uses half, equal, and twice the configured endpoint stride where possible.
+
+Static plotting is enabled by default and writes the following under `trajectory/plots/`:
+
+- `reference_geometry.png`, showing radius, step decomposition, derivatives, and curvature;
+- `density_summary.png`, comparing interpolation, tangent, speed, and subspace metrics;
+- one `paths_and_residuals_stride_XXXX.png` per requested stride.
+
+The plotted latent paths use one shared two-dimensional PCA basis fitted to the dense
+reference and compared methods. This projection is descriptive only: every residual
+and summary statistic is still evaluated in the original latent dimension. Use
+`--no-plot-paths` for metric-only runs. Use `--decode-paths` to decode the empirical
+reference and each interpolated path, add image-space metrics to the JSON, and save
+per-stride MP4 comparisons under `trajectory/videos/`. Decoding is opt-in because it
+adds one reverse ODE solve for the reference and one for every method and stride.
 
 ## Data-consistency sampler
 
@@ -170,7 +196,7 @@ python -m flow_interpolation eval roundtrip --solver heun --ode-steps 128 \
 After cycle fidelity is acceptable, compare:
 
 ```bash
-python -m flow_interpolation eval geodesic --methods lerp,slerp,squad --solver heun --ode-steps 256
+python -m flow_interpolation eval trajectory --methods lerp,slerp,squad --solver heun --ode-steps 256
 python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.0
 python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.5
 python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.85

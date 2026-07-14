@@ -82,10 +82,28 @@ gradient norms, learning rate, step time, throughput, MFU, memory, and sample im
 Evaluation is organized by experiment. For example:
 
 ```bash
+python -m flow_interpolation eval trajectory \
+  --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth \
+  --methods lerp,slerp,squad \
+  --keyframe-strides 6,13,26 \
+  --decode-paths \
+  --save-tensors
 python -m flow_interpolation eval latent --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval hybrid --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval roundtrip --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 ```
+
+The trajectory diagnostic encodes the dense generated sequence once and treats that
+encoded path as an empirical oracle. It compares sparse LERP, SLERP, and SQUAD paths
+across keyframe densities, then reports interpolation error, endpoint-plane and local
+four-keyframe subspace residuals, radial/angular motion, speed, acceleration,
+curvature, and tangent alignment under `outputs/eval/trajectory/`. Shared boundary
+noise is the default so framewise epsilon perturbations do not dominate the measured
+trajectory. Each run saves reference-geometry, keyframe-density, and per-stride path
+and residual plots under `outputs/eval/trajectory/plots/`. The path view is a shared
+2D PCA projection for visualization only; residuals and metrics are calculated in the
+full latent space. `--decode-paths` additionally writes decoded comparison videos and
+image-space metrics, while `--no-plot-paths` disables static plotting.
 
 Run the focused unit tests with `pytest`.
 

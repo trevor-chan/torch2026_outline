@@ -12,6 +12,7 @@ license = {file = "LICENSE"}
 dependencies = [
     "einops>=0.7",
     "imageio-ffmpeg>=0.4",
+    "matplotlib>=3.8",
     "numpy>=1.24",
     "pillow>=10",
     "psutil>=5.9",
