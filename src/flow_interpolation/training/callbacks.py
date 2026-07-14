@@ -43,6 +43,7 @@ class ValidationCallback:
         was_training = self.model.training
         self.model.eval()
         total_loss = 0.0
+        metric_sum = None
         data_iter = iter(dataloader)
         try:
             with torch.no_grad():
@@ -60,16 +61,41 @@ class ValidationCallback:
                         dtype=self.amp_dtype,
                         enabled=self.amp_dtype is not None,
                     ):
-                        loss = self.criterion(self.model, data, conditioning)
+                        if hasattr(self.criterion, "loss_and_metrics"):
+                            loss, metrics = self.criterion.loss_and_metrics(
+                                self.model, data, conditioning
+                            )
+                        else:
+                            loss = self.criterion(self.model, data, conditioning)
+                            metrics = loss.detach().reshape(1)
                     total_loss += loss.item()
+                    metric_sum = (
+                        metrics.detach()
+                        if metric_sum is None
+                        else metric_sum + metrics.detach()
+                    )
         finally:
             self.model.train(was_training)
 
         average_loss = total_loss / self.num_iterations
         if self.log_enabled:
-            print(f"Validation Loss: {average_loss:.4f}")
+            message = f"Validation Loss: {average_loss:.4f}"
+            metric_names = getattr(self.criterion, "metric_names", ())
+            metric_values = dict(
+                zip(metric_names, (metric_sum / self.num_iterations).tolist(), strict=False)
+            )
+            if "coupling_cost_ratio" in metric_values:
+                message += f", Coupling cost ratio: {metric_values['coupling_cost_ratio']:.3f}"
+            print(message)
         if self.writer is not None:
             self.writer.add_scalar("validation/loss", average_loss, training_step)
+            metric_names = getattr(self.criterion, "metric_names", ("objective_loss",))
+            for name, value in zip(
+                metric_names,
+                (metric_sum / self.num_iterations).tolist(),
+                strict=False,
+            ):
+                self.writer.add_scalar(f"validation/{name}", value, training_step)
             self.writer.flush()
         return average_loss
 

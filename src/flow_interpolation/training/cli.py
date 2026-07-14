@@ -70,6 +70,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--device", default="auto")
 
+    coupling = parser.add_argument_group("flow coupling")
+    coupling.add_argument(
+        "--coupling",
+        choices=("independent", "minibatch-ot"),
+        default="independent",
+        help=(
+            "source-target pairing; minibatch-ot runs an exact Hungarian assignment "
+            "inside each local minibatch"
+        ),
+    )
+
     parser.add_argument("--dataset-size", type=int, default=50_000)
     parser.add_argument("--val-size", type=int, default=2_000)
     parser.add_argument("--image-size", type=int, default=16)
@@ -250,7 +261,7 @@ def main(argv: list[str] | None = None) -> None:
         pin_memory=device.type == "cuda",
     )
 
-    criterion = RectifiedFlowLoss()
+    criterion = RectifiedFlowLoss(coupling=args.coupling)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     ema = EMA(model, decay=args.ema_decay, device=device)
     start_step = 0
@@ -287,6 +298,16 @@ def main(argv: list[str] | None = None) -> None:
                 "dataset_video": str(dataset_video),
                 "start_step": start_step,
                 "full_state_resume": resume_result.full_state if resume_result else None,
+                "coupling_scope": (
+                    "per_rank_local_minibatch"
+                    if args.coupling == "minibatch-ot"
+                    else "independent_samples"
+                ),
+                "coupling_solver": (
+                    "scipy.optimize.linear_sum_assignment"
+                    if args.coupling == "minibatch-ot"
+                    else None
+                ),
             },
             resumed_from=resume_checkpoint,
         )

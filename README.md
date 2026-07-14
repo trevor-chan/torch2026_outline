@@ -79,6 +79,30 @@ MFU uses measured forward-plus-backward model FLOPs and a per-device peak suppli
 by `--peak-tflops` (91.1 by default). TensorBoard records loss, validation loss,
 gradient norms, learning rate, step time, throughput, MFU, memory, and sample images.
 
+### Minibatch optimal-transport coupling
+
+Independent Gaussian coupling remains the default. Exact quadratic-cost assignment
+within each sampled minibatch can be enabled with:
+
+```bash
+python -m flow_interpolation train \
+  --run-name minibatch-ot \
+  --coupling minibatch-ot
+```
+
+For data samples `x_i` and one Gaussian minibatch `z_j`, this mode minimizes
+`sum_i ||x_i - z_perm(i)||^2` with SciPy's Hungarian solver, then uses the permuted
+noise in the otherwise unchanged rectified-flow objective. The solve is exact for
+the two empirical minibatches, while repeated minibatch sampling makes it an online
+approximation to population optimal transport. The permutation preserves the sampled
+Gaussian marginal exactly.
+
+TensorBoard records independent and paired mean-squared transport costs, their ratio,
+and the permutation's fixed-point fraction. A ratio below one verifies that assignment
+reduced the minibatch transport cost. Pairing is local to each process in distributed
+training; it does not gather a global batch. Cost construction is quadratic in batch
+size and the Hungarian solve is cubic, so batch-size scaling should be measured.
+
 Evaluation is organized by experiment. For example:
 
 ```bash
