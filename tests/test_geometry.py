@@ -1,6 +1,6 @@
 import torch
 
-from flow_interpolation.evaluation.geometry import interpolate_keyframes, slerp_pair
+from flow_interpolation.utils.interpolation import interpolate_keyframes, slerp_pair
 
 
 def test_slerp_endpoints():

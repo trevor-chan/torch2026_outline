@@ -56,19 +56,20 @@ Run the focused unit tests with `pytest`.
 
 ```text
 src/flow_interpolation/
-|-- data/          synthetic datasets and sequence construction
+|-- data/          datasets, sparse sequences, and observation masks
 |-- models/        flow velocity model architectures
 |-- training/      training CLI, loop, losses, and callbacks
-|-- evaluation/    experiment CLI, samplers, metrics, geometry, and rendering
-`-- utils/         shared image, checkpoint, EMA, and profiling helpers
+|-- evaluation/    evaluation CLI and targeted experiment implementations
+`-- utils/         flow, interpolation, metrics, rendering, and training utilities
 tests/             focused tests for interpolation and evaluation behavior
 docs/              experiment rationale and design notes
 outputs/           generated checkpoints, tensors, images, and videos (ignored)
 ```
 
-Training and evaluation share models and datasets through their package APIs, but
-neither imports the other's CLI. New datasets belong in `data/`; new interpolation
-or sampling methods belong in `evaluation/`; reusable model components belong in
+Training and evaluation share models, datasets, and reusable utilities through
+their package APIs, but neither imports the other's CLI. New targeted diagnostics
+belong in `evaluation/experiments/`. General flow integration, interpolation math,
+metrics, and rendering belong in `utils/`; reusable model components belong in
 `models/`.
 
 ## Current Scope

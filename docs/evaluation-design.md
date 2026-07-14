@@ -1,21 +1,30 @@
-# Evaluation refactor
+# Evaluation architecture
 
-The evaluation suite lives in `src/flow_interpolation/evaluation/` and shares the
-packaged dataset and model APIs.
+The evaluation CLI and targeted diagnostics live in
+`src/flow_interpolation/evaluation/`. Reusable mechanics live in `utils/`, while
+sequence construction and observation masks live in `data/`.
 
-## Files
+## Evaluation files
 
-- `cli.py`: unified evaluation command-line interface.
-- `common.py`: checkpoint loading, ODE integration, encoding/decoding, and metrics.
-- `data.py`: synthetic sequence construction, color-walk scaling, and cadence resolution.
-- `geometry.py`: LERP, SLERP, and generalized hyperspherical SQUAD.
-- `roundtrip.py`: bidirectional cycle, boundary, and batch-consistency diagnostics.
-- `geodesic.py`: latent-geodesic errors against the encoded high-rate trajectory.
-- `latent.py`: endpoint inversion, latent interpolation, and deterministic decoding.
-- `data_consistency.py`: rectified-flow sampling with hard temporal measurements.
-- `endpoint_bridge.py`: endpoint-conditioned stochastic latent bridges.
-- `hybrid.py`: image/latent mixed-state interpolation.
-- `visualization.py`: MP4 comparison panels.
+- `evaluation/cli.py`: command parsing and experiment dispatch.
+- `evaluation/experiments/roundtrip.py`: cycle, boundary, and batch diagnostics.
+- `evaluation/experiments/geodesic.py`: errors against encoded high-rate trajectories.
+- `evaluation/experiments/latent.py`: endpoint inversion and latent interpolation.
+- `evaluation/experiments/data_consistency.py`: sampling with hard temporal measurements.
+- `evaluation/experiments/endpoint_bridge.py`: stochastic endpoint-conditioned bridges.
+- `evaluation/experiments/hybrid.py`: mixed image/latent interpolation.
+
+## Shared files
+
+- `utils/flow.py`: model loading, ODE integration, endpoint prediction, and chunking.
+- `utils/interpolation.py`: LERP, SLERP, and generalized hyperspherical SQUAD.
+- `utils/metrics.py`: image/latent metrics and JSON result serialization.
+- `utils/visualization.py`: comparison panels and MP4 writing.
+- `data/sequences.py`: sparse sequence construction, cadence, and observation masks.
+
+Experiment-specific samplers remain beside the experiments that define their
+behavior. Only generally reusable flow integration and interpolation primitives are
+shared through `utils`.
 
 ## Important behavior changes
 

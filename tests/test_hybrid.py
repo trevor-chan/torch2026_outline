@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import torch
 
-from flow_interpolation.evaluation.common import FlowSettings
-from flow_interpolation.evaluation.hybrid import (
+from flow_interpolation.evaluation.experiments.hybrid import (
     compose_hybrid_state,
     decode_from_time_in_chunks,
     interpolate_images,
 )
+from flow_interpolation.utils.flow import FlowSettings
 
 
 class ZeroVelocityModel(torch.nn.Module):

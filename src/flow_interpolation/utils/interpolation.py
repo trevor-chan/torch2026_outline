@@ -1,3 +1,5 @@
+"""Linear and hyperspherical interpolation primitives."""
+
 from __future__ import annotations
 
 import math

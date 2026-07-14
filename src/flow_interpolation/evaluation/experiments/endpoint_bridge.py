@@ -1,3 +1,5 @@
+"""Endpoint-conditioned stochastic bridge experiment."""
+
 from __future__ import annotations
 
 import itertools
@@ -7,22 +9,18 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from flow_interpolation.evaluation.common import (
+from flow_interpolation.data import SequenceData, missing_mask, nearest_observed_timeline
+from flow_interpolation.evaluation.experiments.latent import _temporal_metrics
+from flow_interpolation.utils.flow import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
-    image_metrics,
     make_boundary_noise,
-    missing_mask,
-    nearest_observed_timeline,
     predict_clean_and_noise,
-    print_noise_stats,
-    save_json,
 )
-from flow_interpolation.evaluation.data import SequenceData
-from flow_interpolation.evaluation.geometry import global_slerp_noise, interpolate_keyframes, slerp_pair
-from flow_interpolation.evaluation.latent import _temporal_metrics
-from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
+from flow_interpolation.utils.interpolation import global_slerp_noise, interpolate_keyframes, slerp_pair
+from flow_interpolation.utils.metrics import image_metrics, print_noise_stats, save_json
+from flow_interpolation.utils.visualization import make_comparison_video_frames, write_video
 
 
 def bridge_envelope(

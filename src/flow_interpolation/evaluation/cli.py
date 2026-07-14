@@ -5,7 +5,17 @@ from pathlib import Path
 
 import torch
 
-from flow_interpolation.evaluation.common import (
+from flow_interpolation.data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
+from flow_interpolation.evaluation.experiments.data_consistency import run_data_consistency_evaluation
+from flow_interpolation.evaluation.experiments.endpoint_bridge import run_endpoint_bridge_evaluation
+from flow_interpolation.evaluation.experiments.geodesic import run_latent_geodesic_evaluation
+from flow_interpolation.evaluation.experiments.hybrid import (
+    IMAGE_INTERPOLATION_METHODS,
+    run_hybrid_latent_interpolation_evaluation,
+)
+from flow_interpolation.evaluation.experiments.latent import run_latent_interpolation_evaluation
+from flow_interpolation.evaluation.experiments.roundtrip import run_roundtrip_evaluation
+from flow_interpolation.utils.flow import (
     FlowSettings,
     ModelSettings,
     build_model,
@@ -13,16 +23,6 @@ from flow_interpolation.evaluation.common import (
     seed_everything,
     validate_flow_settings,
 )
-from flow_interpolation.evaluation.data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
-from flow_interpolation.evaluation.data_consistency import run_data_consistency_evaluation
-from flow_interpolation.evaluation.endpoint_bridge import run_endpoint_bridge_evaluation
-from flow_interpolation.evaluation.geodesic import run_latent_geodesic_evaluation
-from flow_interpolation.evaluation.hybrid import (
-    IMAGE_INTERPOLATION_METHODS,
-    run_hybrid_latent_interpolation_evaluation,
-)
-from flow_interpolation.evaluation.latent import run_latent_interpolation_evaluation
-from flow_interpolation.evaluation.roundtrip import run_roundtrip_evaluation
 
 
 def csv_float_list(value: str) -> list[float]:
@@ -130,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(common)
 
     parser = argparse.ArgumentParser(
+        prog="python -m flow_interpolation eval",
         description="Evaluation suite for rectified-flow temporal/through-plane interpolation."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

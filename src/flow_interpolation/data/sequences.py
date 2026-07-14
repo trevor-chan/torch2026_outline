@@ -1,3 +1,5 @@
+"""Sparse sequence construction and temporal observation helpers."""
+
 from __future__ import annotations
 
 import math
@@ -5,7 +7,7 @@ from dataclasses import dataclass
 
 import torch
 
-from flow_interpolation.data import BouncingBallVideoDataset
+from flow_interpolation.data.bouncing_ball import BouncingBallVideoDataset
 
 
 DEFAULT_TRAINING_COLOR_WALK_STD = 0.1
@@ -39,6 +41,23 @@ class SequenceData:
     @property
     def num_intervals(self) -> int:
         return int(self.observed_indices.numel() - 1)
+
+
+def nearest_observed_timeline(
+    observed_values: torch.Tensor,
+    observed_indices: torch.Tensor,
+    total_frames: int,
+) -> torch.Tensor:
+    frame_ids = torch.arange(total_frames)
+    distances = (frame_ids[:, None] - observed_indices[None, :]).abs()
+    nearest = distances.argmin(dim=1)
+    return observed_values[nearest]
+
+
+def missing_mask(total_frames: int, observed_indices: torch.Tensor) -> torch.Tensor:
+    mask = torch.ones(total_frames, dtype=torch.bool)
+    mask[observed_indices.cpu()] = False
+    return mask
 
 
 def resolve_cadence(

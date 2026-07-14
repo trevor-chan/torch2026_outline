@@ -1,3 +1,5 @@
+"""Latent path geometry diagnostic against encoded dense sequences."""
+
 from __future__ import annotations
 
 import csv
@@ -5,9 +7,10 @@ from pathlib import Path
 
 import torch
 
-from flow_interpolation.evaluation.common import FlowSettings, encode_in_chunks, make_boundary_noise, missing_mask, save_json
-from flow_interpolation.evaluation.data import SequenceData
-from flow_interpolation.evaluation.geometry import interpolate_keyframes
+from flow_interpolation.data import SequenceData, missing_mask
+from flow_interpolation.utils.flow import FlowSettings, encode_in_chunks, make_boundary_noise
+from flow_interpolation.utils.interpolation import interpolate_keyframes
+from flow_interpolation.utils.metrics import save_json
 
 
 def _per_frame_latent_metrics(prediction: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:

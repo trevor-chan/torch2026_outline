@@ -1,29 +1,12 @@
-import sys
-import types
-
 import torch
 
-transformer_stub = types.ModuleType("flow_interpolation.models")
-transformer_stub.TransformerDiffusionModel = torch.nn.Module
-sys.modules.setdefault("flow_interpolation.models", transformer_stub)
-
-dataset_stub = types.ModuleType("flow_interpolation.data")
-
-
-class _DatasetStub:
-    pass
-
-
-dataset_stub.BouncingBallVideoDataset = _DatasetStub
-sys.modules.setdefault("flow_interpolation.data", dataset_stub)
-
-from flow_interpolation.evaluation.common import FlowSettings  # noqa: E402
-from flow_interpolation.evaluation.data import CadenceInfo, SequenceData  # noqa: E402
-from flow_interpolation.evaluation.roundtrip import (  # noqa: E402
+from flow_interpolation.data import CadenceInfo, SequenceData
+from flow_interpolation.evaluation.experiments.roundtrip import (
     _depth_target_time,
     _normalized_error_metrics,
     run_roundtrip_evaluation,
 )
+from flow_interpolation.utils.flow import FlowSettings
 
 
 class ZeroVelocity(torch.nn.Module):

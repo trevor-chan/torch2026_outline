@@ -1,3 +1,5 @@
+"""Flow inversion and round-trip consistency diagnostics."""
+
 from __future__ import annotations
 
 import math
@@ -8,20 +10,17 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from flow_interpolation.evaluation.common import (
+from flow_interpolation.data import SequenceData
+from flow_interpolation.utils.flow import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
-    image_metrics,
     integrate_flow,
     make_boundary_noise,
     perturb_to_p_eps,
     predict_clean_and_noise,
-    print_noise_stats,
-    save_json,
-    tensor_metrics,
 )
-from flow_interpolation.evaluation.data import SequenceData
+from flow_interpolation.utils.metrics import image_metrics, print_noise_stats, save_json, tensor_metrics
 
 
 def _distribution_stats(samples: torch.Tensor) -> dict[str, float]:

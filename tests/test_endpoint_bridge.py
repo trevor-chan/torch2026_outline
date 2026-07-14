@@ -1,24 +1,6 @@
-import sys
-import types
-
 import torch
 
-# Keep geometry tests independent of model and dataset dependencies.
-transformer_stub = types.ModuleType("flow_interpolation.models")
-transformer_stub.TransformerDiffusionModel = torch.nn.Module
-sys.modules.setdefault("flow_interpolation.models", transformer_stub)
-
-dataset_stub = types.ModuleType("flow_interpolation.data")
-
-
-class _DatasetStub:
-    pass
-
-
-dataset_stub.BouncingBallVideoDataset = _DatasetStub
-sys.modules.setdefault("flow_interpolation.data", dataset_stub)
-
-from flow_interpolation.evaluation.endpoint_bridge import (  # noqa: E402
+from flow_interpolation.evaluation.experiments.endpoint_bridge import (
     _batch_radius_slerp,
     _variance_preserving_residual_mix,
     bridge_envelope,

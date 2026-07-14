@@ -1,3 +1,5 @@
+"""Deterministic latent interpolation experiment."""
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -5,20 +7,16 @@ from pathlib import Path
 
 import torch
 
-from flow_interpolation.evaluation.common import (
+from flow_interpolation.data import SequenceData, missing_mask, nearest_observed_timeline
+from flow_interpolation.utils.flow import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
-    image_metrics,
     make_boundary_noise,
-    missing_mask,
-    nearest_observed_timeline,
-    print_noise_stats,
-    save_json,
 )
-from flow_interpolation.evaluation.data import SequenceData
-from flow_interpolation.evaluation.geometry import interpolate_keyframes
-from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
+from flow_interpolation.utils.interpolation import interpolate_keyframes
+from flow_interpolation.utils.metrics import image_metrics, print_noise_stats, save_json
+from flow_interpolation.utils.visualization import make_comparison_video_frames, write_video
 
 
 def _temporal_metrics(frames: torch.Tensor) -> dict[str, float]:

@@ -1,3 +1,5 @@
+"""Data-consistent sampling experiment for sparse temporal observations."""
+
 from __future__ import annotations
 
 import math
@@ -7,17 +9,14 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from flow_interpolation.evaluation.common import (
+from flow_interpolation.data import SequenceData, missing_mask, nearest_observed_timeline
+from flow_interpolation.utils.flow import (
     FlowSettings,
-    image_metrics,
-    missing_mask,
-    nearest_observed_timeline,
     predict_clean_and_noise,
-    save_json,
 )
-from flow_interpolation.evaluation.data import SequenceData
-from flow_interpolation.evaluation.geometry import global_slerp_noise
-from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
+from flow_interpolation.utils.interpolation import global_slerp_noise
+from flow_interpolation.utils.metrics import image_metrics, save_json
+from flow_interpolation.utils.visualization import make_comparison_video_frames, write_video
 
 
 def _sample_innovation(
