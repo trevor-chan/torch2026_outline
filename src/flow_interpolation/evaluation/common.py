@@ -11,7 +11,7 @@ from typing import Any, Iterable, Optional
 import torch
 from tqdm import tqdm
 
-from transformer import TransformerDiffusionModel
+from flow_interpolation.models import TransformerDiffusionModel
 
 
 @dataclass(frozen=True)

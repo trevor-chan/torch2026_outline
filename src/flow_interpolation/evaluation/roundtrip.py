@@ -8,7 +8,7 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
@@ -21,7 +21,7 @@ from eval_common import (
     save_json,
     tensor_metrics,
 )
-from eval_data import SequenceData
+from flow_interpolation.evaluation.data import SequenceData
 
 
 def _distribution_stats(samples: torch.Tensor) -> dict[str, float]:

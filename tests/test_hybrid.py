@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from eval_common import FlowSettings
-from eval_hybrid_latent_interpolation import (
+from flow_interpolation.evaluation.common import FlowSettings
+from flow_interpolation.evaluation.hybrid import (
     compose_hybrid_state,
     decode_from_time_in_chunks,
     interpolate_images,

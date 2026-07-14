@@ -4,14 +4,19 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import os
 
-from dataset import BouncingBallVideoDataset
-from transformer import TransformerDiffusionModel
-from trainer import Trainer
-from utils import save_model, EMA
-from loss import RectifiedFlowLoss
-from callbacks import ValidationCallback, RectifiedFlowSampler, EMAFlowSampler, CheckpointCallback
+from flow_interpolation.data import BouncingBallVideoDataset
+from flow_interpolation.models import TransformerDiffusionModel
+from flow_interpolation.training.callbacks import (
+    CheckpointCallback,
+    EMAFlowSampler,
+    RectifiedFlowSampler,
+    ValidationCallback,
+)
+from flow_interpolation.training.engine import Trainer
+from flow_interpolation.training.losses import RectifiedFlowLoss
+from flow_interpolation.utils.training import EMA, save_model
 
-def main():
+def main(argv: list[str] | None = None) -> None:
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Bouncing Ball Frame Diffusion Model Training')
     parser.add_argument('--batch-size', type=int, default=256, help='input batch size for training (default: 256)')
@@ -53,7 +58,7 @@ def main():
         help='do not write the dataset preview video during initialization',
     )
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Set random seed for reproducibility
     torch.manual_seed(args.seed)

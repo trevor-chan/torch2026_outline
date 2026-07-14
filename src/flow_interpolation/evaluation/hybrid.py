@@ -8,7 +8,7 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     encode_in_chunks,
     image_metrics,
@@ -20,9 +20,9 @@ from eval_common import (
     save_json,
     tensor_metrics,
 )
-from eval_data import SequenceData
-from eval_geometry import interpolate_keyframes
-from eval_visualization import make_comparison_video_frames, write_video
+from flow_interpolation.evaluation.data import SequenceData
+from flow_interpolation.evaluation.geometry import interpolate_keyframes
+from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
 
 
 IMAGE_INTERPOLATION_METHODS = {"linear", "smoothstep", "catmull-rom"}

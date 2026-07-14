@@ -16,18 +16,10 @@ probability-flow characteristic. The sweep tests whether injecting endpoint-deri
 image structure at an intermediate noise level improves temporal consistency or
 fidelity relative to pure SQUAD decoding.
 
-## Installation
-
-Copy these files into the evaluation directory:
-
-- `eval_hybrid_latent_interpolation.py`
-- the updated `eval.py`, or apply `hybrid_latent_interpolation.patch`
-- optionally `test_eval_hybrid_latent_interpolation.py`
-
 ## Recommended first run
 
 ```bash
-python eval.py hybrid \
+python -m flow_interpolation eval hybrid \
   --mix-times 0.1,0.25,0.5,0.75,0.9,0.99 \
   --image-methods linear \
   --solver heun \
@@ -46,7 +38,7 @@ Interpretation of `t_mix`:
 For a compact sweep around the likely transition region:
 
 ```bash
-python eval.py hybrid \
+python -m flow_interpolation eval hybrid \
   --mix-times 0.5,0.7,0.8,0.9,0.95 \
   --image-methods linear,smoothstep \
   --hard-keyframes

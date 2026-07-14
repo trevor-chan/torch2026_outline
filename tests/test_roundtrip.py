@@ -3,11 +3,11 @@ import types
 
 import torch
 
-transformer_stub = types.ModuleType("transformer")
+transformer_stub = types.ModuleType("flow_interpolation.models")
 transformer_stub.TransformerDiffusionModel = torch.nn.Module
-sys.modules.setdefault("transformer", transformer_stub)
+sys.modules.setdefault("flow_interpolation.models", transformer_stub)
 
-dataset_stub = types.ModuleType("dataset")
+dataset_stub = types.ModuleType("flow_interpolation.data")
 
 
 class _DatasetStub:
@@ -15,11 +15,11 @@ class _DatasetStub:
 
 
 dataset_stub.BouncingBallVideoDataset = _DatasetStub
-sys.modules.setdefault("dataset", dataset_stub)
+sys.modules.setdefault("flow_interpolation.data", dataset_stub)
 
-from eval_common import FlowSettings  # noqa: E402
-from eval_data import CadenceInfo, SequenceData  # noqa: E402
-from eval_roundtrip import (  # noqa: E402
+from flow_interpolation.evaluation.common import FlowSettings  # noqa: E402
+from flow_interpolation.evaluation.data import CadenceInfo, SequenceData  # noqa: E402
+from flow_interpolation.evaluation.roundtrip import (  # noqa: E402
     _depth_target_time,
     _normalized_error_metrics,
     run_roundtrip_evaluation,

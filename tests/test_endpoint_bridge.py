@@ -3,14 +3,12 @@ import types
 
 import torch
 
-# The evaluation folder is intended to live beside the repository's transformer.py
-# and dataset.py. Provide minimal stubs so these isolated utility tests can run in
-# the artifact directory as well.
-transformer_stub = types.ModuleType("transformer")
+# Keep geometry tests independent of model and dataset dependencies.
+transformer_stub = types.ModuleType("flow_interpolation.models")
 transformer_stub.TransformerDiffusionModel = torch.nn.Module
-sys.modules.setdefault("transformer", transformer_stub)
+sys.modules.setdefault("flow_interpolation.models", transformer_stub)
 
-dataset_stub = types.ModuleType("dataset")
+dataset_stub = types.ModuleType("flow_interpolation.data")
 
 
 class _DatasetStub:
@@ -18,9 +16,9 @@ class _DatasetStub:
 
 
 dataset_stub.BouncingBallVideoDataset = _DatasetStub
-sys.modules.setdefault("dataset", dataset_stub)
+sys.modules.setdefault("flow_interpolation.data", dataset_stub)
 
-from eval_endpoint_bridge import (  # noqa: E402
+from flow_interpolation.evaluation.endpoint_bridge import (  # noqa: E402
     _batch_radius_slerp,
     _variance_preserving_residual_mix,
     bridge_envelope,

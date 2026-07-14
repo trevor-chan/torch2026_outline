@@ -1,7 +1,9 @@
 /data
-.png
-.pth
-.mp4
 /outputs
-/__pycache__
+__pycache__/
+*.egg-info/
+*.py[cod]
 *.pth
+.pytest_cache/
+.venv/
+/build/

@@ -1,18 +1,21 @@
 # Evaluation refactor
 
-Place these files in the repository root on the `slerp_interp` branch. They import the existing `dataset.py` and `transformer.py` directly.
+The evaluation suite lives in `src/flow_interpolation/evaluation/` and shares the
+packaged dataset and model APIs.
 
 ## Files
 
-- `eval.py`: unified command-line interface.
-- `eval_common.py`: checkpoint loading, ODE integration, epsilon-boundary handling, encoding/decoding, and metrics.
-- `eval_data.py`: synthetic sequence creation, color-walk scaling, and explicit cadence resolution.
-- `eval_geometry.py`: LERP, ISCS-style SLERP, radius-preserving SLERP, and generalized hyperspherical SQUAD.
-- `eval_roundtrip.py`: bidirectional cycle tests, image-boundary sweeps, scale-normalized errors, encoded-vs-random latent comparisons, and batch-consistency checks.
-- `eval_geodesic.py`: latent-geodesic errors against the encoded high-rate ground-truth trajectory.
-- `eval_latent_interpolation.py`: endpoint inversion, SLERP/SQUAD interpolation, and deterministic decoding.
-- `eval_data_consistency.py`: ISCS-inspired rectified-flow posterior sampling with hard temporal measurement consistency.
-- `eval_visualization.py`: MP4 comparison panels.
+- `cli.py`: unified evaluation command-line interface.
+- `common.py`: checkpoint loading, ODE integration, encoding/decoding, and metrics.
+- `data.py`: synthetic sequence construction, color-walk scaling, and cadence resolution.
+- `geometry.py`: LERP, SLERP, and generalized hyperspherical SQUAD.
+- `roundtrip.py`: bidirectional cycle, boundary, and batch-consistency diagnostics.
+- `geodesic.py`: latent-geodesic errors against the encoded high-rate trajectory.
+- `latent.py`: endpoint inversion, latent interpolation, and deterministic decoding.
+- `data_consistency.py`: rectified-flow sampling with hard temporal measurements.
+- `endpoint_bridge.py`: endpoint-conditioned stochastic latent bridges.
+- `hybrid.py`: image/latent mixed-state interpolation.
+- `visualization.py`: MP4 comparison panels.
 
 ## Important behavior changes
 
@@ -54,19 +57,19 @@ before ordinary data-to-noise inversion. Round-trip cycle tests do **not** injec
 
 ```bash
 # Both cycle directions
-python eval.py roundtrip --checkpoint bouncing_ball_diffusion_ema.pth
+python -m flow_interpolation eval roundtrip --checkpoint bouncing_ball_diffusion_ema.pth
 
 # Compare encoded ground-truth latents with SLERP and SQUAD paths
-python eval.py geodesic --methods slerp,squad
+python -m flow_interpolation eval geodesic --methods slerp,squad
 
 # Existing endpoint-latent interpolation, now with optional SQUAD
-python eval.py latent --methods slerp,squad
+python -m flow_interpolation eval latent --methods slerp,squad
 
 # ISCS-inspired temporal inverse problem: compare iid and SLERP innovations
-python eval.py dc --noise-controls independent,slerp --renoise-mode dds --eta 0.85
+python -m flow_interpolation eval dc --noise-controls independent,slerp --renoise-mode dds --eta 0.85
 
 # Run all evaluations with one model/sequence load
-python eval.py all --methods slerp,squad --noise-controls independent,slerp
+python -m flow_interpolation eval all --methods slerp,squad --noise-controls independent,slerp
 ```
 
 Outputs are written under `outputs/eval` by default.
@@ -101,7 +104,7 @@ mae_over_target_mean_abs
 Example:
 
 ```bash
-python eval.py roundtrip \
+python -m flow_interpolation eval roundtrip \
   --roundtrip-image-depths 0.9,0.99,0.999,1.0 \
   --roundtrip-batch-sizes 1,2,4,8,16,32 \
   --roundtrip-step-counts 64,128,256,512 \
@@ -145,24 +148,24 @@ x_next = (1 - t_next) * x0_dc + t_next * z_mix
 Use Heun and run the boundary/batch diagnostics first:
 
 ```bash
-python eval.py roundtrip --solver heun --ode-steps 128
+python -m flow_interpolation eval roundtrip --solver heun --ode-steps 128
 ```
 
 Then request a solver convergence sweep in a single run:
 
 ```bash
-python eval.py roundtrip --solver heun --ode-steps 128 \
+python -m flow_interpolation eval roundtrip --solver heun --ode-steps 128 \
   --roundtrip-step-counts 64,128,256,512
 ```
 
 After cycle fidelity is acceptable, compare:
 
 ```bash
-python eval.py geodesic --methods lerp,slerp,squad --solver heun --ode-steps 256
-python eval.py dc --noise-controls independent,slerp --eta 0.0
-python eval.py dc --noise-controls independent,slerp --eta 0.5
-python eval.py dc --noise-controls independent,slerp --eta 0.85
-python eval.py dc --noise-controls independent,slerp --renoise-mode ddpm
+python -m flow_interpolation eval geodesic --methods lerp,slerp,squad --solver heun --ode-steps 256
+python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.0
+python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.5
+python -m flow_interpolation eval dc --noise-controls independent,slerp --eta 0.85
+python -m flow_interpolation eval dc --noise-controls independent,slerp --renoise-mode ddpm
 ```
 
 ## Endpoint-conditioned stochastic SQUAD bridge
@@ -172,7 +175,7 @@ trajectory and adds uncertainty only inside intervals between observed frames.
 The residual envelope is exactly zero at every keyframe.
 
 ```bash
-python eval.py bridge \
+python -m flow_interpolation eval bridge \
   --samplers init,iterative \
   --stochasticities 0.05,0.10,0.20 \
   --num-samples 4 \
@@ -192,13 +195,13 @@ Useful first ablations:
 
 ```bash
 # Check that eta=0 reproduces (or nearly reproduces) deterministic SQUAD.
-python eval.py bridge --samplers init --stochasticities 0 --num-samples 1
+python -m flow_interpolation eval bridge --samplers init --stochasticities 0 --num-samples 1
 
 # One-shot uncertainty around the working latent interpolation.
-python eval.py bridge --samplers init --stochasticities 0.02,0.05,0.10
+python -m flow_interpolation eval bridge --samplers init --stochasticities 0.02,0.05,0.10
 
 # Test whether repeated guidance helps or over-constrains the trajectory.
-python eval.py bridge --samplers iterative --stochasticities 0,0.05,0.10 \
+python -m flow_interpolation eval bridge --samplers iterative --stochasticities 0,0.05,0.10 \
   --bridge-strength 0.10
 ```
 

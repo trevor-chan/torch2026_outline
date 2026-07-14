@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     image_metrics,
     missing_mask,
@@ -15,9 +15,9 @@ from eval_common import (
     predict_clean_and_noise,
     save_json,
 )
-from eval_data import SequenceData
-from eval_geometry import global_slerp_noise
-from eval_visualization import make_comparison_video_frames, write_video
+from flow_interpolation.evaluation.data import SequenceData
+from flow_interpolation.evaluation.geometry import global_slerp_noise
+from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
 
 
 def _sample_innovation(

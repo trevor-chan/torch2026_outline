@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
@@ -16,9 +16,9 @@ from eval_common import (
     print_noise_stats,
     save_json,
 )
-from eval_data import SequenceData
-from eval_geometry import interpolate_keyframes
-from eval_visualization import make_comparison_video_frames, write_video
+from flow_interpolation.evaluation.data import SequenceData
+from flow_interpolation.evaluation.geometry import interpolate_keyframes
+from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
 
 
 def _temporal_metrics(frames: torch.Tensor) -> dict[str, float]:

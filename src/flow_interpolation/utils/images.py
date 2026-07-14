@@ -2,66 +2,13 @@ import torch
 import os
 import numpy as np
 from PIL import Image
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple
 
-def flatten_image(image):
-    """
-    Flatten a batch of images or a single image to 1D
-    
-    Args:
-        image: Input image tensor
-        
-    Returns:
-        Flattened image tensor
-    """
-    if len(image.shape) == 4:  # Batch of images [B, C, H, W]
-        return image.view(image.size(0), -1)
-    elif len(image.shape) == 3:  # Single image [C, H, W]
-        return image.view(-1)
-    elif len(image.shape) <= 2:  # Already flattened
-        return image
-    else:
-        raise ValueError(f"Unexpected image shape: {image.shape}")
 
-def normalize_image(image, target_range=(-1, 1)):
-    """
-    Normalize image values to a target range
-    
-    Args:
-        image: Input image tensor (assumed to be in range [0, 255] or [0, 1])
-        target_range: Tuple of (min, max) for target range, default (-1, 1)
-        
-    Returns:
-        Normalized image tensor
-    """
-    # Convert to float if needed
-    if image.dtype != torch.float32:
-        image = image.float()
-    
-    # If values are in [0, 255], normalize to [0, 1] first
-    if image.max() > 1.0:
-        image = image / 255.0
-        
-    # Now normalize from [0, 1] to target range
-    min_val, max_val = target_range
-    image = image * (max_val - min_val) + min_val
-    
-    return image
-
-def denormalize_image(image):
-    """
-    Convert image from [-1, 1] range to [0 .. 255] range
-    """
-    return ((image + 1) / 2 * 255).clamp(0, 255)
-
-def one_hot_encode(labels, num_classes=10, device=None):
-    """
-    One-hot encode class labels
-    """
-    one_hot = torch.zeros(num_classes, device=device)
-    one_hot[labels] = 1
-    
-    return one_hot
+def denormalize_image(image, source_range=(-1, 1)):
+    """Convert an image from ``source_range`` to byte-valued pixels."""
+    lower, upper = source_range
+    return ((image - lower) / (upper - lower) * 255).clamp(0, 255)
 
 def reconstruct_image(flat_image, height=28, width=28, channels=1):
     """

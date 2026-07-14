@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import time
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Callable, Dict
+from typing import Callable, List, Optional
 from torch.utils.data import DataLoader
-from utils import get_memory_usage, format_memory_stats, EMA, estimate_flops, calculate_mfu
+from flow_interpolation.utils.training import EMA, calculate_mfu, estimate_flops, get_memory_usage
 
 
 @dataclass

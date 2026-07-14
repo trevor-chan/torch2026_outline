@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     ModelSettings,
     build_model,
@@ -13,16 +13,16 @@ from eval_common import (
     seed_everything,
     validate_flow_settings,
 )
-from eval_data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
-from eval_data_consistency import run_data_consistency_evaluation
-from eval_endpoint_bridge import run_endpoint_bridge_evaluation
-from eval_geodesic import run_latent_geodesic_evaluation
-from eval_hybrid_latent_interpolation import (
+from flow_interpolation.evaluation.data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
+from flow_interpolation.evaluation.data_consistency import run_data_consistency_evaluation
+from flow_interpolation.evaluation.endpoint_bridge import run_endpoint_bridge_evaluation
+from flow_interpolation.evaluation.geodesic import run_latent_geodesic_evaluation
+from flow_interpolation.evaluation.hybrid import (
     IMAGE_INTERPOLATION_METHODS,
     run_hybrid_latent_interpolation_evaluation,
 )
-from eval_latent_interpolation import run_latent_interpolation_evaluation
-from eval_roundtrip import run_roundtrip_evaluation
+from flow_interpolation.evaluation.latent import run_latent_interpolation_evaluation
+from flow_interpolation.evaluation.roundtrip import run_roundtrip_evaluation
 
 
 def csv_float_list(value: str) -> list[float]:
@@ -347,8 +347,8 @@ def validate_noise_controls(noise_controls: list[str]) -> None:
         raise ValueError(f"Unknown noise control(s): {sorted(unknown)}")
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     seed_everything(args.seed)
     torch.set_float32_matmul_precision("high")
     device = resolve_device(args.device)

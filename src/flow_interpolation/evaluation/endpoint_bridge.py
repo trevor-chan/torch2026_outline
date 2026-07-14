@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from eval_common import (
+from flow_interpolation.evaluation.common import (
     FlowSettings,
     decode_in_chunks,
     encode_in_chunks,
@@ -19,10 +19,10 @@ from eval_common import (
     print_noise_stats,
     save_json,
 )
-from eval_data import SequenceData
-from eval_geometry import global_slerp_noise, interpolate_keyframes, slerp_pair
-from eval_latent_interpolation import _temporal_metrics
-from eval_visualization import make_comparison_video_frames, write_video
+from flow_interpolation.evaluation.data import SequenceData
+from flow_interpolation.evaluation.geometry import global_slerp_noise, interpolate_keyframes, slerp_pair
+from flow_interpolation.evaluation.latent import _temporal_metrics
+from flow_interpolation.evaluation.visualization import make_comparison_video_frames, write_video
 
 
 def bridge_envelope(

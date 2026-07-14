@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from dataset import BouncingBallVideoDataset
+from flow_interpolation.data import BouncingBallVideoDataset
 
 
 DEFAULT_TRAINING_COLOR_WALK_STD = 0.1
