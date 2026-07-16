@@ -250,6 +250,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     latent = subparsers.add_parser("latent", parents=[common])
     add_geometry_arguments(latent)
+    latent.add_argument(
+        "--tau",
+        type=float,
+        default=1.0,
+        help=(
+            "Fraction of the configured data-to-noise ODE interval traversed before "
+            "latent interpolation. 0 interpolates at data_eps; 1 uses noise_time."
+        ),
+    )
     add_video_arguments(latent)
 
     hybrid = subparsers.add_parser(
@@ -346,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_parser = subparsers.add_parser("all", parents=[common])
     add_geometry_arguments(all_parser)
+    all_parser.add_argument("--tau", type=float, default=1.0)
     all_parser.add_argument("--keyframe-strides", type=csv_int_list, default=None)
     add_video_arguments(all_parser)
     all_parser.add_argument(
@@ -447,6 +457,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command in {"trajectory", "geodesic", "latent", "all"}:
         validate_methods(args.methods)
+    if args.command in {"latent", "all"} and not 0.0 <= args.tau <= 1.0:
+        raise ValueError("--tau must lie in [0, 1]")
     if args.command == "hybrid":
         unknown_image_methods = set(args.image_methods) - IMAGE_INTERPOLATION_METHODS
         if unknown_image_methods:
@@ -531,6 +543,7 @@ def main(argv: list[str] | None = None) -> None:
             methods=args.methods,
             slerp_mode=args.slerp_mode,
             boundary_noise_mode=args.boundary_noise_mode,
+            tau=args.tau,
             seed=args.seed + 303,
             output_dir=str(output_root / "latent"),
             video_fps=args.video_fps,

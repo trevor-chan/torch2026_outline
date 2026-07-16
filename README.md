@@ -131,7 +131,9 @@ python -m flow_interpolation eval trajectory \
   --keyframe-strides 6,13,26 \
   --decode-paths \
   --save-tensors
-python -m flow_interpolation eval latent --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
+python -m flow_interpolation eval latent \
+  --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth \
+  --tau 0.75
 python -m flow_interpolation eval hybrid --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval roundtrip --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval epsilon \
@@ -168,6 +170,13 @@ within-frame variability over boundary draws,
 draw-averaged trajectory,
 `V_time = E[k] ||mean_r z_(k+1)^(r) - mean_r z_k^(r)||^2`, and reports
 `V_time / V_enc`.
+
+The latent interpolation command accepts `--tau` in `[0,1]`. It first transports
+observed images through that fraction of the configured data-to-noise ODE interval,
+performs LERP/SLERP/SQUAD at the resulting intermediate flow time, and decodes over
+the same partial interval. `--tau 1` is the existing terminal-noise method and
+remains the default. `--tau 0` interpolates at the epsilon-perturbed data boundary,
+not mathematical `t=0`.
 
 Run the focused unit tests with `pytest`.
 

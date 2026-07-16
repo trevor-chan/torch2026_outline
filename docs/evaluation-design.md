@@ -136,12 +136,37 @@ python -m flow_interpolation eval trajectory \
 # Existing endpoint-latent interpolation, now with optional SQUAD
 python -m flow_interpolation eval latent --methods slerp,squad
 
+# Interpolate after traversing 75% of the configured image-to-noise interval
+python -m flow_interpolation eval latent --methods slerp,squad --tau 0.75
+
 # ISCS-inspired temporal inverse problem: compare iid and SLERP innovations
 python -m flow_interpolation eval dc --noise-controls independent,slerp --renoise-mode dds --eta 0.85
 
 # Run all evaluations with one model/sequence load
 python -m flow_interpolation eval all --methods slerp,squad --noise-controls independent,slerp
 ```
+
+## Partial-depth latent interpolation
+
+The latent interpolation command defines
+
+```text
+t_tau = data_time + tau * (noise_time - data_time)
+```
+
+and transports each observed image only to `t_tau` before constructing the requested
+latent interpolation path. The interpolated states are then integrated from `t_tau`
+back to `data_time`. ODE step counts are scaled by `tau`, preserving the nominal
+full-path integration step size.
+
+- `tau=1` reproduces interpolation at the configured terminal-noise boundary.
+- `0<tau<1` interpolates at an intermediate flow state.
+- `tau=0` interpolates directly at the epsilon-perturbed data boundary.
+
+SLERP and SQUAD at intermediate times are experimental geometric choices: these
+states need not follow a standard-normal marginal or a fixed-radius hypersphere.
+Comparing them across tau tests whether a shorter, more image-informed transport
+produces cleaner decoded trajectories despite that mismatch.
 
 Outputs are written under `outputs/eval` by default.
 
