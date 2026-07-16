@@ -40,6 +40,16 @@ training_std * sqrt(high_frame_dt / training_frame_dt)
 
 so the random-walk variance per unit time stays fixed.
 
+### Background noise
+
+Background noise is controlled with `--background-noise-std`. It is zero-mean
+Gaussian noise in `[0,1]` image units, sampled independently for every rendered
+frame before compositing the foreground. Unlike the color walk, it models a
+per-frame observation perturbation and is therefore not scaled with frame spacing.
+Training and evaluation should use the same value. A separate deterministic RNG
+stream ensures that a clean/noisy dataset comparison retains the same physical
+trajectory and color evolution.
+
 ### Endpoint cadence
 
 `training_frame_dt / high_frame_dt` is no longer passed through Python's banker's `round`. The default is explicit half-up nearest-integer rounding. Every run prints:
@@ -63,6 +73,54 @@ x_eps = (1 - eps) x_0 + eps z
 ```
 
 before ordinary data-to-noise inversion. Round-trip cycle tests do **not** inject a second perturbation halfway through a cycle.
+
+The focused epsilon ablation uses common random boundary-noise draws to compare
+several values without adding Monte Carlo differences between configurations:
+
+```bash
+python -m flow_interpolation eval epsilon \
+  --epsilons 1e-5,1e-4,1e-3,1e-2 \
+  --epsilon-boundary-samples 8 \
+  --epsilon-frame-source observed \
+  --save-tensors
+```
+
+For each epsilon it reports coordinate-wise variance across images, variance across
+boundary-noise draws for each fixed image, and their combined variance. The static
+maps average these CxHxW tensors over channels and include the coordinate second
+moment. For the standard-normal target, coordinate variance, second moment, latent
+standard deviation, and radius divided by `sqrt(d)` should all be near one. Paired
+latent RMSE measures the total map displacement relative to `--data-eps`;
+trajectory-centered RMSE removes the per-draw mean latent, and trajectory-step RMSE
+compares adjacent encoded-frame differences. Their raw values are already measured
+in prior standard-deviation units, while JSON and CSV also retain normalization by
+the corresponding reference trajectory scale. The latter two distinguish a harmless
+common shift from a change in the geometry used for interpolation.
+`--epsilon-frame-source dense` uses the full high-rate sequence when a stronger
+population estimate is worth the extra ODE solves.
+
+The same run compares encoding uncertainty with the temporal latent signal:
+
+```text
+V_enc  = E_k E_r ||z_k^(r) - mean_r[z_k^(r)]||_2^2
+V_time = E_k ||mean_r[z_(k+1)^(r)] - mean_r[z_k^(r)]||_2^2
+SNR_trajectory = V_time / V_enc
+```
+
+Both full-dimensional squared-L2 energies and per-coordinate values are saved. Their
+ratio is identical. Values above one mean the average adjacent-frame latent motion
+is larger than the within-frame ambiguity induced by the boundary perturbation;
+values below one mean boundary-seed variability dominates. `V_time` depends on the
+frame spacing, so dense and observed-frame runs should not be compared without
+accounting for their recorded cadence.
+
+Across-image and boundary-draw variance are conditional summaries:
+`E_draw[Var_image(z | draw)]` and `E_image[Var_draw(z | image)]`. They are not
+additive components of the combined variance. Also, a dense timeline contains
+strongly correlated frames from one process realization, so agreement with the
+global Gaussian prior should be judged most directly from per-latent scale and
+second moments; estimating full prior calibration requires a broader independent
+image sample.
 
 ## Commands
 

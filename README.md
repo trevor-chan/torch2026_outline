@@ -69,6 +69,25 @@ python -m flow_interpolation train \
   --max-steps 200000
 ```
 
+To train on images with a small independent Gaussian perturbation in the rendered
+background, use:
+
+```bash
+python -m flow_interpolation train \
+  --run-name bouncing_ball_background_noise_std_0p01 \
+  --background-noise-std 0.01 \
+  --max-steps 150000
+```
+
+The standard deviation is expressed in the same `[0,1]` image units as the generated
+frames. Noise is sampled independently per frame before the ball and trail are
+composited. It uses a separate deterministic random stream, so changing the noise
+amplitude does not change the underlying trajectory or color walk. The default is
+zero for compatibility with existing runs. For the epsilon diagnostic, evaluate a
+noise-trained model once with the default clean inputs and once with the matching
+`--background-noise-std`; use separate `--output-dir` values so the runs do not
+overwrite one another.
+
 Inspect all runs with:
 
 ```bash
@@ -115,6 +134,12 @@ python -m flow_interpolation eval trajectory \
 python -m flow_interpolation eval latent --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval hybrid --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval roundtrip --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
+python -m flow_interpolation eval epsilon \
+  --checkpoint outputs/runs/bouncing_ball_background_noise_std_0p01/model_ema_final_step_000150000.pth \
+  --background-noise-std 0.01 \
+  --epsilons 1e-5,1e-4,1e-3,1e-2 \
+  --epsilon-boundary-samples 8 \
+  --save-tensors
 ```
 
 The trajectory diagnostic encodes the dense generated sequence once and treats that
@@ -128,6 +153,21 @@ and residual plots under `outputs/eval/trajectory/plots/`. The path view is a sh
 2D PCA projection for visualization only; residuals and metrics are calculated in the
 full latent space. `--decode-paths` additionally writes decoded comparison videos and
 image-space metrics, while `--no-plot-paths` disables static plotting.
+
+The `epsilon` diagnostic re-encodes the same images with identical boundary-noise
+draws at every requested epsilon. It separates terminal-latent variance across
+images from variance across repeated boundary perturbations, saves channel-averaged
+variance maps, and reports absolute, trajectory-centered, and trajectory-step RMSE
+relative to `--data-eps`. Use `--epsilon-frame-source dense` to estimate the maps
+from the full generated sequence rather than only the observed keyframes. Outputs
+are written under `outputs/eval/epsilon_ablation/`. Summary plots include the
+standard-normal target variance and scale of one. Raw displacement RMSE is therefore
+read directly in prior standard-deviation units. The trajectory-SNR plot compares
+within-frame variability over boundary draws,
+`V_enc = E[k,r] ||z_k^(r) - mean_r z_k^(r)||^2`, with adjacent motion of the
+draw-averaged trajectory,
+`V_time = E[k] ||mean_r z_(k+1)^(r) - mean_r z_k^(r)||^2`, and reports
+`V_time / V_enc`.
 
 Run the focused unit tests with `pytest`.
 

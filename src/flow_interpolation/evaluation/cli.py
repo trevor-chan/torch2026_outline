@@ -8,6 +8,7 @@ import torch
 from flow_interpolation.data import DEFAULT_TRAINING_COLOR_WALK_STD, SequenceData, build_sequence
 from flow_interpolation.evaluation.experiments.data_consistency import run_data_consistency_evaluation
 from flow_interpolation.evaluation.experiments.endpoint_bridge import run_endpoint_bridge_evaluation
+from flow_interpolation.evaluation.experiments.epsilon import run_epsilon_ablation
 from flow_interpolation.evaluation.experiments.trajectory import run_trajectory_analysis
 from flow_interpolation.evaluation.experiments.hybrid import (
     IMAGE_INTERPOLATION_METHODS,
@@ -57,7 +58,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--non-strict-load", action="store_true")
-    parser.add_argument("--image-size", type=int, default=32)
+    parser.add_argument("--image-size", type=int, default=16)
     parser.add_argument("--model-dim", type=int, default=256)
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=4)
@@ -67,7 +68,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--num-intervals", type=int, default=10)
     parser.add_argument("--start-index", type=int, default=512)
-    parser.add_argument("--training-frame-dt", type=float, default=0.1)
+    parser.add_argument("--training-frame-dt", type=float, default=0.25)
     parser.add_argument("--high-frame-dt", type=float, default=0.02)
     parser.add_argument(
         "--training-color-walk-std",
@@ -82,16 +83,25 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help="Override the high-rate per-frame std. By default it is variance-scaled from training.",
     )
     parser.add_argument(
+        "--background-noise-std",
+        type=float,
+        default=0.0,
+        help=(
+            "Match the model's training-time Gaussian background noise in image-space "
+            "units. Noise is independent per rendered frame."
+        ),
+    )
+    parser.add_argument(
         "--stride-rounding",
         choices=("nearest", "floor", "ceil", "exact"),
         default="nearest",
         help="Nearest uses explicit half-up rounding and reports the resulting timing error.",
     )
 
-    parser.add_argument("--ode-steps", type=int, default=128)
+    parser.add_argument("--ode-steps", type=int, default=256)
     parser.add_argument("--solver", choices=("euler", "heun"), default="heun")
-    parser.add_argument("--data-eps", type=float, default=1e-3)
-    parser.add_argument("--t-eps", type=float, default=1e-3)
+    parser.add_argument("--data-eps", type=float, default=1e-4)
+    parser.add_argument("--t-eps", type=float, default=1e-5)
     parser.add_argument("--encode-batch-size", type=int, default=32)
     parser.add_argument("--decode-batch-size", type=int, default=32)
     parser.add_argument("--output-dir", default="outputs/eval")
@@ -195,6 +205,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--boundary-noise-mode", choices=("shared", "independent"), default="shared"
     )
     roundtrip.add_argument("--save-tensors", action="store_true")
+
+    epsilon = subparsers.add_parser(
+        "epsilon",
+        parents=[common],
+        help="Ablate the image-boundary epsilon used for data-to-noise inversion.",
+    )
+    epsilon.add_argument(
+        "--epsilons",
+        type=csv_float_list,
+        default=[1e-5, 1e-4, 1e-3, 1e-2],
+        help=(
+            "Comma-separated boundary epsilons. The configured --data-eps is "
+            "automatically included and used as the comparison reference."
+        ),
+    )
+    epsilon.add_argument(
+        "--epsilon-boundary-samples",
+        type=int,
+        default=8,
+        help="Number of common boundary-noise draws used at every epsilon.",
+    )
+    epsilon.add_argument(
+        "--epsilon-frame-source",
+        choices=("observed", "dense"),
+        default="observed",
+        help="Encode sparse observed keyframes or the full dense generated sequence.",
+    )
+    epsilon.add_argument(
+        "--boundary-noise-mode",
+        choices=("shared", "independent"),
+        default="shared",
+        help="Shared uses one boundary perturbation field for every frame in a draw.",
+    )
+    epsilon.add_argument("--save-tensors", action="store_true")
 
     trajectory = subparsers.add_parser(
         "trajectory",
@@ -371,6 +415,7 @@ def make_sequence(args: argparse.Namespace) -> SequenceData:
         high_frame_dt=args.high_frame_dt,
         training_color_walk_std=args.training_color_walk_std,
         color_walk_std=args.color_walk_std,
+        background_noise_std=args.background_noise_std,
         stride_rounding=args.stride_rounding,
     )
 
@@ -389,6 +434,8 @@ def validate_noise_controls(noise_controls: list[str]) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.background_noise_std < 0.0:
+        raise ValueError("--background-noise-std must be non-negative")
     seed_everything(args.seed)
     torch.set_float32_matmul_precision("high")
     device = resolve_device(args.device)
@@ -435,6 +482,21 @@ def main(argv: list[str] | None = None) -> None:
             image_depths=args.roundtrip_image_depths,
             batch_sizes=args.roundtrip_batch_sizes,
             step_counts=args.roundtrip_step_counts,
+        )
+
+    if args.command == "epsilon":
+        run_epsilon_ablation(
+            model=model,
+            device=device,
+            sequence=sequence,
+            flow=flow,
+            epsilons=args.epsilons,
+            num_boundary_samples=args.epsilon_boundary_samples,
+            boundary_noise_mode=args.boundary_noise_mode,
+            frame_source=args.epsilon_frame_source,
+            seed=args.seed + 151,
+            output_dir=str(output_root / "epsilon_ablation"),
+            save_tensors=args.save_tensors,
         )
 
     if args.command in {"trajectory", "geodesic", "all"}:

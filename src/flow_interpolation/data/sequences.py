@@ -33,6 +33,7 @@ class SequenceData:
     cadence: CadenceInfo
     high_rate_color_walk_std: float
     start_index: int
+    background_noise_std: float = 0.0
 
     @property
     def num_frames(self) -> int:
@@ -132,6 +133,7 @@ def build_sequence(
     high_frame_dt: float,
     training_color_walk_std: float = DEFAULT_TRAINING_COLOR_WALK_STD,
     color_walk_std: float | None = None,
+    background_noise_std: float = 0.0,
     stride_rounding: str = "nearest",
 ) -> SequenceData:
     if num_intervals <= 0:
@@ -161,6 +163,7 @@ def build_sequence(
         seed=seed,
         frame_dt=high_frame_dt,
         color_walk_std=actual_color_std,
+        background_noise_std=background_noise_std,
         write_video=False,
     )
     frames = dataset.samples[start_index : start_index + sequence_length].contiguous()
@@ -177,6 +180,10 @@ def build_sequence(
         f"{training_frame_dt:.6f}s; high-rate std={actual_color_std:.6f} per "
         f"{high_frame_dt:.6f}s."
     )
+    print(
+        f"Background noise: independent Gaussian std={background_noise_std:.6f} "
+        "per rendered frame."
+    )
     return SequenceData(
         frames=frames,
         observed_indices=observed_indices,
@@ -184,4 +191,5 @@ def build_sequence(
         cadence=cadence,
         high_rate_color_walk_std=actual_color_std,
         start_index=start_index,
+        background_noise_std=background_noise_std,
     )

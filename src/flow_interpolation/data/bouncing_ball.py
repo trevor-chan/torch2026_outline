@@ -31,6 +31,7 @@ class BouncingBallVideoDataset(Dataset):
         bounce_jitter_degrees: float = 15.0,
         color_walk_std: float = 0.1,
         background_color: Tuple[float, float, float] = (0.02, 0.02, 0.025),
+        background_noise_std: float = 0.0,
         normalize: bool = False,
         return_conditioning: bool = False,
         video_path: Optional[str] = "outputs/bouncing_ball_dataset.mp4",
@@ -51,6 +52,7 @@ class BouncingBallVideoDataset(Dataset):
         self.bounce_jitter_degrees = bounce_jitter_degrees
         self.color_walk_std = color_walk_std
         self.background_color = background_color
+        self.background_noise_std = background_noise_std
         self.normalize = normalize
         self.return_conditioning = return_conditioning
         self.video_path = video_path
@@ -109,6 +111,8 @@ class BouncingBallVideoDataset(Dataset):
             raise ValueError("trail_sample_dt must be positive")
         if self.average_bounce_time <= 0:
             raise ValueError("average_bounce_time must be positive")
+        if self.background_noise_std < 0.0:
+            raise ValueError("background_noise_std must be non-negative")
 
         min_x, max_x = self.ball_radius, self.width - self.ball_radius
         min_y, max_y = self.ball_radius, self.height - self.ball_radius
@@ -116,6 +120,9 @@ class BouncingBallVideoDataset(Dataset):
             raise ValueError("ball_radius is too large for the requested image_size")
 
         rng = random.Random(self.seed)
+        # Keep rendering noise independent of the physical trajectory RNG so
+        # changing its amplitude does not change motion, bounces, or color.
+        background_generator = torch.Generator().manual_seed(self.seed + 1_000_003)
         x = rng.uniform(min_x, max_x)
         y = rng.uniform(min_y, max_y)
 
@@ -152,6 +159,7 @@ class BouncingBallVideoDataset(Dataset):
                 history=history[-trail_point_count:],
                 grid_x=grid_x,
                 grid_y=grid_y,
+                background_generator=background_generator,
             )
 
             next_hue = (hue + rng.gauss(0.0, self.color_walk_std)) % 1.0
@@ -180,9 +188,27 @@ class BouncingBallVideoDataset(Dataset):
         dominant_range = playfield_width if abs(direction[0]) >= abs(direction[1]) else playfield_height
         return dominant_range / (self.average_bounce_time * dominant_component)
 
-    def _render_frame(self, x, y, color, history, grid_x, grid_y) -> torch.Tensor:
+    def _render_frame(
+        self,
+        x,
+        y,
+        color,
+        history,
+        grid_x,
+        grid_y,
+        background_generator,
+    ) -> torch.Tensor:
         background = torch.tensor(self.background_color, dtype=self.dtype).view(3, 1, 1)
         frame = background.expand(3, self.height, self.width).clone()
+        if self.background_noise_std > 0.0:
+            frame.add_(
+                torch.randn(
+                    frame.shape,
+                    dtype=self.dtype,
+                    generator=background_generator,
+                ),
+                alpha=self.background_noise_std,
+            )
 
         if len(history) == 1:
             trail_x, trail_y, trail_color = history[0]

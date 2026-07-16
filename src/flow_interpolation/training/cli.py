@@ -84,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-size", type=int, default=50_000)
     parser.add_argument("--val-size", type=int, default=2_000)
     parser.add_argument("--image-size", type=int, default=16)
+    parser.add_argument(
+        "--background-noise-std",
+        type=float,
+        default=0.0,
+        help=(
+            "Per-pixel Gaussian background-noise standard deviation in image-space "
+            "units. Noise is added before compositing the ball and trail."
+        ),
+    )
     parser.add_argument("--model-dim", "--hidden-dim", dest="model_dim", type=int, default=256)
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=4)
@@ -192,6 +201,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--val-steps must be positive")
     if args.peak_tflops <= 0:
         parser.error("--peak-tflops must be positive")
+    if args.background_noise_std < 0.0:
+        parser.error("--background-noise-std must be non-negative")
 
     torch.manual_seed(args.seed)
     torch.set_float32_matmul_precision("high")
@@ -233,6 +244,7 @@ def main(argv: list[str] | None = None) -> None:
         num_samples=args.dataset_size,
         image_size=args.image_size,
         seed=train_seed,
+        background_noise_std=args.background_noise_std,
         normalize=False,
         return_conditioning=False,
         video_path=str(dataset_video),
@@ -242,6 +254,7 @@ def main(argv: list[str] | None = None) -> None:
         num_samples=args.val_size,
         image_size=args.image_size,
         seed=val_seed,
+        background_noise_std=args.background_noise_std,
         normalize=False,
         return_conditioning=False,
         write_video=False,
