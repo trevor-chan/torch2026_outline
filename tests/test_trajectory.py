@@ -5,8 +5,10 @@ import torch
 from flow_interpolation.data import CadenceInfo, SequenceData
 from flow_interpolation.evaluation.experiments.trajectory import run_trajectory_analysis
 from flow_interpolation.utils.flow import FlowSettings
+from flow_interpolation.utils.interpolation import interpolation_segment
 from flow_interpolation.utils.trajectory import (
     analyze_trajectory_at_stride,
+    closest_point_error_decomposition,
     subspace_residuals,
     trajectory_geometry,
 )
@@ -65,6 +67,92 @@ def test_lerp_recovers_piecewise_linear_reference() -> None:
         analysis["method_metrics"]["lerp"]["tangent_cosine_similarity"],
         torch.ones(7),
     )
+    torch.testing.assert_close(
+        analysis["method_metrics"]["lerp"]["timing_error_absolute"],
+        torch.zeros(7),
+    )
+    torch.testing.assert_close(
+        analysis["method_metrics"]["lerp"]["closest_point_orthogonal_rmse"],
+        torch.zeros(7),
+    )
+
+
+def test_closest_point_decomposition_separates_lerp_time_warp_from_geometry() -> None:
+    keyframes = torch.tensor([[0.0, 0.0], [10.0, 0.0]])
+    nominal = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0])
+    true_alpha = nominal.square()
+    reference = torch.stack([10.0 * true_alpha, torch.zeros_like(true_alpha)], dim=1)
+    result = closest_point_error_decomposition(
+        reference,
+        keyframes,
+        segment_indices=torch.zeros(5, dtype=torch.long),
+        interpolation_coordinate=nominal,
+        method="lerp",
+        slerp_mode="iscs",
+        keyframe_stride=4,
+        sample_spacing=0.1,
+    )
+
+    torch.testing.assert_close(result["closest_point_alpha"], true_alpha)
+    torch.testing.assert_close(
+        result["timing_error_absolute"],
+        (true_alpha - nominal).abs(),
+    )
+    torch.testing.assert_close(
+        result["closest_point_orthogonal_l2"],
+        torch.zeros(5),
+    )
+
+
+def test_closest_point_decomposition_detects_orthogonal_lerp_error() -> None:
+    keyframes = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
+    reference = torch.tensor([[0.0, 0.0], [0.5, 2.0], [1.0, 0.0]])
+    result = closest_point_error_decomposition(
+        reference,
+        keyframes,
+        segment_indices=torch.zeros(3, dtype=torch.long),
+        interpolation_coordinate=torch.tensor([0.0, 0.5, 1.0]),
+        method="lerp",
+        slerp_mode="iscs",
+        keyframe_stride=2,
+        sample_spacing=1.0,
+    )
+
+    assert result["timing_error_absolute"][1] == 0.0
+    assert result["closest_point_orthogonal_l2"][1] == 2.0
+
+
+def test_slerp_closest_point_recovers_nonuniform_parameterization() -> None:
+    keyframes = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    nominal = torch.linspace(0.0, 1.0, 5)
+    true_alpha = nominal.square()
+    reference = interpolation_segment(
+        keyframes,
+        0,
+        true_alpha,
+        "slerp",
+        slerp_mode="radius-lerp",
+    )
+    result = closest_point_error_decomposition(
+        reference,
+        keyframes,
+        segment_indices=torch.zeros(5, dtype=torch.long),
+        interpolation_coordinate=nominal,
+        method="slerp",
+        slerp_mode="radius-lerp",
+        keyframe_stride=4,
+        sample_spacing=0.1,
+        coarse_samples=65,
+        refinement_steps=20,
+    )
+
+    torch.testing.assert_close(
+        result["closest_point_alpha"],
+        true_alpha,
+        atol=2e-4,
+        rtol=0.0,
+    )
+    assert float(result["closest_point_orthogonal_l2"].max()) < 5e-4
 
 
 def test_stride_analysis_reports_ignored_incomplete_tail() -> None:
@@ -131,13 +219,17 @@ def test_trajectory_experiment_writes_density_summary_and_per_frame_csv(tmp_path
     assert (tmp_path / "plots" / "density_summary.png").is_file()
     assert (tmp_path / "plots" / "paths_and_residuals_stride_0001.png").is_file()
     assert (tmp_path / "plots" / "paths_and_residuals_stride_0002.png").is_file()
+    assert (tmp_path / "plots" / "timing_geometry_stride_0001.png").is_file()
+    assert (tmp_path / "plots" / "timing_geometry_stride_0002.png").is_file()
     assert payload["reference_definition"].startswith("Dense dataset frames")
     assert payload["density_sweep"]["2"]["methods"].keys() == {"lerp", "squad"}
     assert payload["artifacts"]["plots"] == [
         "plots/reference_geometry.png",
         "plots/density_summary.png",
         "plots/paths_and_residuals_stride_0001.png",
+        "plots/timing_geometry_stride_0001.png",
         "plots/paths_and_residuals_stride_0002.png",
+        "plots/timing_geometry_stride_0002.png",
     ]
     assert payload["density_sweep"]["1"]["methods"]["lerp"]["intermediate_frames"][
         "relative_l2"
@@ -145,3 +237,5 @@ def test_trajectory_experiment_writes_density_summary_and_per_frame_csv(tmp_path
     header = output_csv.read_text().splitlines()[0]
     assert "endpoint_plane_relative_l2" in header
     assert "tangent_cosine_similarity" in header
+    assert "timing_error_absolute" in header
+    assert "closest_point_orthogonal_rmse" in header

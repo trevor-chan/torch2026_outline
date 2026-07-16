@@ -5,7 +5,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from flow_interpolation.utils.interpolation import interpolate_keyframes
+from flow_interpolation.utils.interpolation import (
+    interpolate_keyframes,
+    interpolation_segment,
+)
 
 
 def flatten_trajectory(trajectory: torch.Tensor) -> torch.Tensor:
@@ -181,6 +184,162 @@ def subspace_residuals(
     return output
 
 
+def _closest_lerp_points(
+    targets: torch.Tensor,
+    left: torch.Tensor,
+    right: torch.Tensor,
+    *,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    targets_flat = targets.float().flatten(start_dim=1)
+    left_flat = left.float().flatten()
+    direction = right.float().flatten() - left_flat
+    denominator = direction.square().sum()
+    if float(denominator) <= eps:
+        alpha = torch.zeros(targets.shape[0], dtype=targets_flat.dtype)
+    else:
+        alpha = ((targets_flat - left_flat) * direction).sum(dim=1) / denominator
+        alpha = alpha.clamp(0.0, 1.0)
+    closest = left_flat + alpha[:, None] * direction
+    return alpha, closest.reshape(targets.shape)
+
+
+def _closest_curved_points(
+    targets: torch.Tensor,
+    keyframes: torch.Tensor,
+    segment_index: int,
+    method: str,
+    *,
+    slerp_mode: str,
+    coarse_samples: int,
+    refinement_steps: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if coarse_samples < 3:
+        raise ValueError("coarse_samples must be at least three")
+    if refinement_steps < 0:
+        raise ValueError("refinement_steps must be non-negative")
+    targets_flat = targets.float().flatten(start_dim=1)
+    grid = torch.linspace(0.0, 1.0, coarse_samples, dtype=keyframes.dtype)
+    coarse_curve = interpolation_segment(
+        keyframes,
+        segment_index,
+        grid,
+        method,
+        slerp_mode=slerp_mode,
+    ).float().flatten(start_dim=1)
+    distances = torch.cdist(targets_flat, coarse_curve).square()
+    best_indices = distances.argmin(dim=1)
+    best_alpha = grid[best_indices].float()
+    best_points = coarse_curve[best_indices]
+    best_distance = distances.gather(1, best_indices[:, None]).squeeze(1)
+
+    step = 1.0 / (coarse_samples - 1)
+    lower = (best_alpha - step).clamp_min(0.0)
+    upper = (best_alpha + step).clamp_max(1.0)
+    lower = torch.where(best_indices == 0, best_alpha, lower)
+    upper = torch.where(best_indices == coarse_samples - 1, best_alpha, upper)
+    inverse_phi = (5.0**0.5 - 1.0) / 2.0
+
+    for _ in range(refinement_steps):
+        left_alpha = upper - inverse_phi * (upper - lower)
+        right_alpha = lower + inverse_phi * (upper - lower)
+        left_points = interpolation_segment(
+            keyframes,
+            segment_index,
+            left_alpha,
+            method,
+            slerp_mode=slerp_mode,
+        ).float().flatten(start_dim=1)
+        right_points = interpolation_segment(
+            keyframes,
+            segment_index,
+            right_alpha,
+            method,
+            slerp_mode=slerp_mode,
+        ).float().flatten(start_dim=1)
+        left_distance = (left_points - targets_flat).square().sum(dim=1)
+        right_distance = (right_points - targets_flat).square().sum(dim=1)
+        choose_left = left_distance <= right_distance
+        upper = torch.where(choose_left, right_alpha, upper)
+        lower = torch.where(choose_left, lower, left_alpha)
+
+    refined_alpha = 0.5 * (lower + upper)
+    refined_points = interpolation_segment(
+        keyframes,
+        segment_index,
+        refined_alpha,
+        method,
+        slerp_mode=slerp_mode,
+    ).float().flatten(start_dim=1)
+    refined_distance = (refined_points - targets_flat).square().sum(dim=1)
+    use_refined = refined_distance < best_distance
+    alpha = torch.where(use_refined, refined_alpha, best_alpha)
+    points = torch.where(use_refined[:, None], refined_points, best_points)
+    return alpha, points.reshape(targets.shape)
+
+
+def closest_point_error_decomposition(
+    reference: torch.Tensor,
+    keyframes: torch.Tensor,
+    segment_indices: torch.Tensor,
+    interpolation_coordinate: torch.Tensor,
+    *,
+    method: str,
+    slerp_mode: str,
+    keyframe_stride: int,
+    sample_spacing: float,
+    coarse_samples: int = 129,
+    refinement_steps: int = 24,
+    eps: float = 1e-12,
+) -> dict[str, torch.Tensor]:
+    """Separate same-time path error into timing and closest-curve residuals."""
+    frame_count = reference.shape[0]
+    closest_alpha = torch.empty(frame_count, dtype=torch.float32)
+    closest_points = torch.empty_like(reference, dtype=torch.float32)
+
+    for segment_index in range(keyframes.shape[0] - 1):
+        frame_mask = segment_indices == segment_index
+        targets = reference[frame_mask]
+        if method == "lerp":
+            alpha, points = _closest_lerp_points(
+                targets,
+                keyframes[segment_index],
+                keyframes[segment_index + 1],
+                eps=eps,
+            )
+        else:
+            alpha, points = _closest_curved_points(
+                targets,
+                keyframes,
+                segment_index,
+                method,
+                slerp_mode=slerp_mode,
+                coarse_samples=coarse_samples,
+                refinement_steps=refinement_steps,
+            )
+        closest_alpha[frame_mask] = alpha.cpu()
+        closest_points[frame_mask] = points.cpu()
+
+    reference_flat = reference.float().flatten(start_dim=1)
+    closest_flat = closest_points.flatten(start_dim=1)
+    residual = reference_flat - closest_flat
+    residual_l2 = residual.norm(dim=1)
+    reference_l2 = reference_flat.norm(dim=1).clamp_min(eps)
+    signed_timing_error = closest_alpha - interpolation_coordinate.float()
+    return {
+        "closest_point_alpha": closest_alpha,
+        "signed_timing_error": signed_timing_error,
+        "timing_error_absolute": signed_timing_error.abs(),
+        "timing_error_frames": signed_timing_error.abs() * keyframe_stride,
+        "timing_error_time": (
+            signed_timing_error.abs() * keyframe_stride * sample_spacing
+        ),
+        "closest_point_orthogonal_l2": residual_l2,
+        "closest_point_orthogonal_rmse": residual.square().mean(dim=1).sqrt(),
+        "closest_point_orthogonal_relative_l2": residual_l2 / reference_l2,
+    }
+
+
 def analyze_trajectory_at_stride(
     reference: torch.Tensor,
     *,
@@ -188,6 +347,8 @@ def analyze_trajectory_at_stride(
     sample_spacing: float,
     methods: list[str],
     slerp_mode: str,
+    closest_point_samples: int = 129,
+    closest_point_refinement_steps: int = 24,
 ) -> dict:
     """Compare sparse-keyframe paths with a dense encoded reference trajectory."""
     if keyframe_stride <= 0:
@@ -236,6 +397,18 @@ def analyze_trajectory_at_stride(
         ).cpu()
         geometry = trajectory_geometry(prediction, sample_spacing)
         errors = latent_error_metrics(prediction, reference)
+        closest_point = closest_point_error_decomposition(
+            reference,
+            keyframes,
+            segment_indices,
+            interpolation_coordinate,
+            method=method,
+            slerp_mode=slerp_mode,
+            keyframe_stride=keyframe_stride,
+            sample_spacing=sample_spacing,
+            coarse_samples=closest_point_samples,
+            refinement_steps=closest_point_refinement_steps,
+        )
         tangent_cosine = F.cosine_similarity(
             geometry["tangent"],
             reference_geometry["tangent"],
@@ -246,6 +419,13 @@ def analyze_trajectory_at_stride(
         )["rmse"]
         method_metrics[method] = {
             **errors,
+            **closest_point,
+            "same_time_to_closest_rmse_ratio": errors["rmse"]
+            / closest_point["closest_point_orthogonal_rmse"].clamp_min(1e-12),
+            "closest_rmse_fraction_of_same_time_error": closest_point[
+                "closest_point_orthogonal_rmse"
+            ]
+            / errors["rmse"].clamp_min(1e-12),
             "tangent_cosine_similarity": tangent_cosine,
             "tangent_angle_degrees": torch.rad2deg(torch.acos(tangent_cosine)),
             "speed_relative_error": (
@@ -274,5 +454,9 @@ def analyze_trajectory_at_stride(
         "local_four_keyframe_subspace_residual": local_four_keyframe,
         "predictions": predictions,
         "method_metrics": method_metrics,
+        "closest_point_settings": {
+            "coarse_samples": closest_point_samples,
+            "refinement_steps": closest_point_refinement_steps,
+        },
         "ignored_tail_frames": int(original_frame_count - last_frame - 1),
     }
