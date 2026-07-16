@@ -282,8 +282,6 @@ def run_trajectory_analysis(
     output_csv: str,
     output_tensors: str | None = None,
     keyframe_strides: list[int] | None = None,
-    closest_point_samples: int = 129,
-    closest_point_refinement_steps: int = 24,
     plot_paths: bool = True,
     decode_paths: bool = False,
     video_fps: float = 10.0,
@@ -318,8 +316,6 @@ def run_trajectory_analysis(
             sample_spacing=sequence.cadence.high_frame_dt,
             methods=methods,
             slerp_mode=slerp_mode,
-            closest_point_samples=closest_point_samples,
-            closest_point_refinement_steps=closest_point_refinement_steps,
         )
         for stride in strides
     }
@@ -401,16 +397,6 @@ def run_trajectory_analysis(
             "Shared boundary noise preserves temporal comparability; independent noise adds "
             "framewise perturbations to the measured trajectory."
         ),
-        "closest_point_definition": (
-            "For each dense reference frame, minimize distance to the candidate "
-            "interpolation curve within the surrounding keyframe segment. LERP uses "
-            "exact orthogonal projection; SLERP and SQUAD use coarse bracketing and "
-            "bounded one-dimensional refinement."
-        ),
-        "closest_point_settings": {
-            "coarse_samples": closest_point_samples,
-            "refinement_steps": closest_point_refinement_steps,
-        },
         "dense_frame_count": sequence.num_frames,
         "dense_frame_spacing": sequence.cadence.high_frame_dt,
         "cadence": sequence.cadence,

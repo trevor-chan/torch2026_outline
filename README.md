@@ -154,13 +154,6 @@ and residual plots under `outputs/eval/trajectory/plots/`. The path view is a sh
 full latent space. `--decode-paths` additionally writes decoded comparison videos and
 image-space metrics, while `--no-plot-paths` disables static plotting.
 
-The same trajectory run separates path parameterization from curve geometry. For
-each dense encoded intermediate, it finds the closest point on the candidate
-LERP/SLERP/SQUAD segment. It reports `|alpha* - s|` as timing error and the residual
-to the closest curve point as orthogonal geometric error. LERP projection is exact;
-SLERP and SQUAD use a dense bracket followed by bounded scalar refinement. Each
-keyframe stride gets a `timing_geometry_stride_*.png` plot.
-
 The `epsilon` diagnostic re-encodes the same images with identical boundary-noise
 draws at every requested epsilon. It separates terminal-latent variance across
 images from variance across repeated boundary perturbations, saves channel-averaged

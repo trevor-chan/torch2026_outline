@@ -149,21 +149,6 @@ def add_trajectory_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Decode each latent path and save image-space comparison videos and metrics.",
     )
-    parser.add_argument(
-        "--closest-point-samples",
-        type=int,
-        default=129,
-        help=(
-            "Coarse samples per SLERP/SQUAD segment for timing/geometric "
-            "closest-point decomposition."
-        ),
-    )
-    parser.add_argument(
-        "--closest-point-refinement-steps",
-        type=int,
-        default=24,
-        help="Bounded one-dimensional refinement iterations after coarse bracketing.",
-    )
     add_render_arguments(parser)
     parser.add_argument("--save-tensors", action="store_true")
 
@@ -362,8 +347,6 @@ def build_parser() -> argparse.ArgumentParser:
     all_parser = subparsers.add_parser("all", parents=[common])
     add_geometry_arguments(all_parser)
     all_parser.add_argument("--keyframe-strides", type=csv_int_list, default=None)
-    all_parser.add_argument("--closest-point-samples", type=int, default=129)
-    all_parser.add_argument("--closest-point-refinement-steps", type=int, default=24)
     add_video_arguments(all_parser)
     all_parser.add_argument(
         "--plot-paths", action=argparse.BooleanOptionalAction, default=True
@@ -464,11 +447,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command in {"trajectory", "geodesic", "latent", "all"}:
         validate_methods(args.methods)
-    if args.command in {"trajectory", "geodesic", "all"}:
-        if args.closest_point_samples < 3:
-            raise ValueError("--closest-point-samples must be at least 3")
-        if args.closest_point_refinement_steps < 0:
-            raise ValueError("--closest-point-refinement-steps must be non-negative")
     if args.command == "hybrid":
         unknown_image_methods = set(args.image_methods) - IMAGE_INTERPOLATION_METHODS
         if unknown_image_methods:
@@ -536,8 +514,6 @@ def main(argv: list[str] | None = None) -> None:
             output_csv=str(trajectory_dir / "per_frame.csv"),
             output_tensors=str(trajectory_dir / "tensors.pt") if args.save_tensors else None,
             keyframe_strides=args.keyframe_strides,
-            closest_point_samples=args.closest_point_samples,
-            closest_point_refinement_steps=args.closest_point_refinement_steps,
             plot_paths=args.plot_paths,
             decode_paths=args.decode_paths,
             video_fps=args.video_fps,

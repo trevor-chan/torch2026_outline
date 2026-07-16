@@ -139,77 +139,6 @@ def save_stride_diagnostic_plot(
     return output_path
 
 
-def save_timing_geometry_plot(
-    analysis: dict,
-    *,
-    keyframe_stride: int,
-    sample_spacing: float,
-    output_path: str | Path,
-) -> Path:
-    """Plot closest-point time warp and residual geometry for one stride."""
-    plt = _pyplot()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    time = analysis["frame_indices"].float() * sample_spacing
-    time_values = _as_numpy(time)
-    nominal = analysis["interpolation_coordinate"]
-
-    figure, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
-    warp_axis, timing_axis, geometry_axis = axes
-    for method, metrics in analysis["method_metrics"].items():
-        warp_axis.scatter(
-            _as_numpy(nominal),
-            _as_numpy(metrics["closest_point_alpha"]),
-            s=18,
-            alpha=0.7,
-            label=method,
-        )
-        timing_axis.plot(
-            time_values,
-            _as_numpy(metrics["timing_error_absolute"]),
-            label=method,
-        )
-        geometry_axis.plot(
-            time_values,
-            _as_numpy(metrics["rmse"]),
-            linestyle="--",
-            alpha=0.75,
-            label=f"{method}: same-time",
-        )
-        geometry_axis.plot(
-            time_values,
-            _as_numpy(metrics["closest_point_orthogonal_rmse"]),
-            label=f"{method}: closest-point",
-        )
-
-    warp_axis.plot([0.0, 1.0], [0.0, 1.0], color="black", linestyle=":", label="identity")
-    warp_axis.set_title("Closest curve coordinate")
-    warp_axis.set_xlabel("Nominal coordinate s")
-    warp_axis.set_ylabel(r"Closest coordinate $\alpha^*$")
-    warp_axis.legend(fontsize=8)
-
-    timing_axis.set_title("Along-path timing error")
-    timing_axis.set_xlabel("Sequence time")
-    timing_axis.set_ylabel(r"$|\alpha^* - s|$")
-    timing_axis.legend(fontsize=8)
-
-    geometry_axis.set_title("Same-time vs closest-curve error")
-    geometry_axis.set_xlabel("Sequence time")
-    geometry_axis.set_ylabel("Latent RMSE")
-    geometry_axis.legend(fontsize=7)
-
-    for axis in axes:
-        axis.grid(alpha=0.25)
-    figure.suptitle(
-        f"Timing/geometry decomposition: stride {keyframe_stride} "
-        f"({keyframe_stride * sample_spacing:g} time units)",
-        fontsize=14,
-    )
-    figure.savefig(output_path, dpi=160)
-    plt.close(figure)
-    return output_path
-
-
 def save_reference_geometry_plot(
     geometry: dict[str, torch.Tensor],
     *,
@@ -318,19 +247,13 @@ def save_density_summary_plot(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(density_sweep.values(), key=lambda item: item["keyframe_spacing"])
 
-    figure, axes = plt.subplots(2, 3, figsize=(16, 8), constrained_layout=True)
+    figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     specifications = [
         ("relative_l2", "Interpolation error", "Mean relative L2"),
         ("tangent_angle_degrees", "Tangent mismatch", "Mean angle (degrees)"),
         ("speed_relative_error", "Speed mismatch", "Mean relative error"),
-        ("timing_error_absolute", "Timing mismatch", r"Mean $|\alpha^* - s|$"),
-        (
-            "closest_point_orthogonal_relative_l2",
-            "Closest-curve geometric error",
-            "Mean relative L2",
-        ),
     ]
-    for axis, (metric, title, ylabel) in zip(axes.flatten()[:5], specifications):
+    for axis, (metric, title, ylabel) in zip(axes.flatten()[:3], specifications):
         spacing, method_values = _summary_means(density_sweep, methods, metric)
         for method, values in method_values.items():
             axis.plot(spacing, values, marker="o", label=method)
@@ -338,7 +261,7 @@ def save_density_summary_plot(
         axis.set_ylabel(ylabel)
         axis.legend(fontsize=8)
 
-    residual_axis = axes.flatten()[5]
+    residual_axis = axes.flatten()[3]
     spacing = [float(item["keyframe_spacing"]) for item in ordered]
     residual_axis.plot(
         spacing,
@@ -397,22 +320,13 @@ def save_trajectory_plots(
         ),
     ]
     paths.extend(
-        path
-        for stride, analysis in analyses.items()
-        for path in (
-            save_stride_diagnostic_plot(
-                analysis,
-                keyframe_stride=stride,
-                sample_spacing=sample_spacing,
-                output_path=output_dir / f"paths_and_residuals_stride_{stride:04d}.png",
-            ),
-            save_timing_geometry_plot(
-                analysis,
-                keyframe_stride=stride,
-                sample_spacing=sample_spacing,
-                output_path=output_dir / f"timing_geometry_stride_{stride:04d}.png",
-            ),
+        save_stride_diagnostic_plot(
+            analysis,
+            keyframe_stride=stride,
+            sample_spacing=sample_spacing,
+            output_path=output_dir / f"paths_and_residuals_stride_{stride:04d}.png",
         )
+        for stride, analysis in analyses.items()
     )
     for path in paths:
         print(f"Saved trajectory plot to {path}")

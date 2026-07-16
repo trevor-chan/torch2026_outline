@@ -197,8 +197,6 @@ process, not a claim about the globally optimal path through noise space. The
 - radius, radial speed, angular speed, and radial/angular step fractions;
 - latent speed, acceleration, turning angle, and discrete curvature;
 - interpolator tangent alignment and speed error;
-- closest-point timing error `|alpha* - s|` and equivalent frame/time displacement;
-- closest-curve orthogonal L2, RMSE, and relative-L2 geometric error;
 - a keyframe-density sweep controlled by `--keyframe-strides`.
 
 The JSON contains aggregate and interpolation-coordinate summaries. The CSV contains
@@ -210,7 +208,6 @@ Static plotting is enabled by default and writes the following under `trajectory
 
 - `reference_geometry.png`, showing radius, step decomposition, derivatives, and curvature;
 - `density_summary.png`, comparing interpolation, tangent, speed, and subspace metrics;
-- `timing_geometry_stride_*.png`, comparing the inferred time warp with closest-curve error;
 - one `paths_and_residuals_stride_XXXX.png` per requested stride.
 
 The plotted latent paths use one shared two-dimensional PCA basis fitted to the dense
