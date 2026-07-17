@@ -131,6 +131,11 @@ python -m flow_interpolation eval trajectory \
   --keyframe-strides 6,13,26 \
   --decode-paths \
   --save-tensors
+python -m flow_interpolation eval nuisance \
+  --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth \
+  --svd-ranks 0,1,2,4,8,16,32,64 \
+  --fourier-harmonics 0,1,2,4,8,16,32,64 \
+  --save-tensors
 python -m flow_interpolation eval latent --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval hybrid --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
 python -m flow_interpolation eval roundtrip --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth
@@ -153,6 +158,19 @@ and residual plots under `outputs/eval/trajectory/plots/`. The path view is a sh
 2D PCA projection for visualization only; residuals and metrics are calculated in the
 full latent space. `--decode-paths` additionally writes decoded comparison videos and
 image-space metrics, while `--no-plot-paths` disables static plotting.
+
+The `nuisance` diagnostic asks whether the dense terminal-latent trajectory contains
+a low-dimensional or low-frequency physical signal embedded in visually unimportant
+variation. It forms the adjacent-difference matrix, applies a mean-preserving centered
+SVD and temporal Fourier low-pass sweep, integrates each reconstructed difference
+sequence from the original first latent, and decodes every result. Outputs under
+`outputs/eval/nuisance/` compare retained latent difference energy with total,
+foreground-weighted, and background-weighted decoded image loss. A soft activity
+centroid measures whether ball motion survives even when pixel-level detail changes.
+The compact `sweep.csv` has one row per rank or cutoff rather than one row per frame.
+Full rank and full bandwidth are added automatically as identity controls. Shared
+boundary noise is strongly recommended so the test measures trajectory structure
+rather than independent epsilon-boundary perturbations.
 
 The `epsilon` diagnostic re-encodes the same images with identical boundary-noise
 draws at every requested epsilon. It separates terminal-latent variance across
