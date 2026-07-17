@@ -15,9 +15,6 @@ from flow_interpolation.evaluation.experiments.hybrid import (
     run_hybrid_latent_interpolation_evaluation,
 )
 from flow_interpolation.evaluation.experiments.latent import run_latent_interpolation_evaluation
-from flow_interpolation.evaluation.experiments.nuisance import (
-    run_nuisance_dimension_analysis,
-)
 from flow_interpolation.evaluation.experiments.roundtrip import run_roundtrip_evaluation
 from flow_interpolation.utils.flow import (
     FlowSettings,
@@ -251,54 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_trajectory_arguments(trajectory)
 
-    nuisance = subparsers.add_parser(
-        "nuisance",
-        parents=[common],
-        help=(
-            "Low-rank and low-pass the dense terminal-latent trajectory, then decode "
-            "it to test whether temporal disorder is visually dispensable."
-        ),
-    )
-    nuisance.add_argument(
-        "--svd-ranks",
-        type=csv_int_list,
-        default=[0, 1, 2, 4, 8, 16, 32, 64],
-        help=(
-            "Ranks retained from the mean-centered adjacent-difference SVD. Rank zero "
-            "retains only the mean difference; full rank is added automatically."
-        ),
-    )
-    nuisance.add_argument(
-        "--fourier-harmonics",
-        type=csv_int_list,
-        default=[0, 1, 2, 4, 8, 16, 32, 64],
-        help=(
-            "Maximum nonnegative temporal Fourier harmonic retained in adjacent "
-            "differences. Harmonic zero is the DC/constant-velocity path; the full "
-            "bandwidth is added automatically."
-        ),
-    )
-    nuisance.add_argument(
-        "--boundary-noise-mode",
-        choices=("shared", "independent"),
-        default="shared",
-        help="Shared avoids injecting framewise epsilon-boundary noise into the spectrum.",
-    )
-    nuisance.add_argument(
-        "--plot-nuisance",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Write temporal-spectrum and decoded-retention plots.",
-    )
-    nuisance.add_argument(
-        "--nuisance-videos",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Write compact decoded SVD and Fourier comparison videos.",
-    )
-    add_render_arguments(nuisance)
-    nuisance.add_argument("--save-tensors", action="store_true")
-
     latent = subparsers.add_parser("latent", parents=[common])
     add_geometry_arguments(latent)
     add_video_arguments(latent)
@@ -498,11 +447,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command in {"trajectory", "geodesic", "latent", "all"}:
         validate_methods(args.methods)
-    if args.command == "nuisance":
-        if any(rank < 0 for rank in args.svd_ranks):
-            raise ValueError("--svd-ranks must contain only non-negative integers")
-        if any(harmonic < 0 for harmonic in args.fourier_harmonics):
-            raise ValueError("--fourier-harmonics must contain only non-negative integers")
     if args.command == "hybrid":
         unknown_image_methods = set(args.image_methods) - IMAGE_INTERPOLATION_METHODS
         if unknown_image_methods:
@@ -576,26 +520,6 @@ def main(argv: list[str] | None = None) -> None:
             display_scale=args.display_scale,
             gap=args.gap,
             residual_scale=args.residual_scale,
-        )
-
-    if args.command == "nuisance":
-        run_nuisance_dimension_analysis(
-            model=model,
-            device=device,
-            sequence=sequence,
-            flow=flow,
-            boundary_noise_mode=args.boundary_noise_mode,
-            seed=args.seed + 252,
-            svd_ranks=args.svd_ranks,
-            fourier_harmonics=args.fourier_harmonics,
-            output_dir=str(output_root / "nuisance"),
-            plot_results=args.plot_nuisance,
-            write_videos=args.nuisance_videos,
-            video_fps=args.video_fps,
-            display_scale=args.display_scale,
-            gap=args.gap,
-            residual_scale=args.residual_scale,
-            save_tensors=args.save_tensors,
         )
 
     if args.command in {"latent", "all"}:

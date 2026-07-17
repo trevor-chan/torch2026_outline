@@ -218,44 +218,6 @@ reference and each interpolated path, add image-space metrics to the JSON, and s
 per-stride MP4 comparisons under `trajectory/videos/`. Decoding is opt-in because it
 adds one reverse ODE solve for the reference and one for every method and stride.
 
-## Temporal nuisance-dimension diagnostic
-
-The `nuisance` command tests whether temporal disorder in the full terminal-noise
-tensor is carried by dimensions that have little effect after decoding:
-
-```bash
-python -m flow_interpolation eval nuisance \
-  --checkpoint outputs/runs/baseline/model_ema_final_step_000150000.pth \
-  --svd-ranks 0,1,2,4,8,16,32,64 \
-  --fourier-harmonics 0,1,2,4,8,16,32,64
-```
-
-For the dense encoded trajectory, define adjacent differences
-`D[k] = z[k+1] - z[k]`. Two endpoint-preserving reconstruction sweeps are used:
-
-- centered SVD/PCA retains the mean difference plus the requested dominant ranks;
-- Fourier filtering retains the DC component plus frequencies through the requested
-  harmonic.
-
-Each reconstructed difference sequence is integrated from the exact first latent and
-receives only a numerical endpoint correction. The resulting latent sequence is then
-decoded. `metrics.json` and the compact `sweep.csv` report:
-
-- total and centered difference energy explained;
-- latent trajectory and difference RMSE;
-- decoded error against both ground truth and the decoded full latent trajectory;
-- foreground- and background-weighted image RMSE;
-- soft activity-centroid position, velocity, and mass errors;
-- singular-component dominant frequencies and the cumulative Fourier spectrum.
-
-`plots/temporal_spectrum.png` shows whether difference energy is low-rank and
-low-frequency. `plots/retention_vs_image_loss.png` tests whether aggressive latent
-compression leaves decoded appearance and motion intact. Compact SVD and Fourier
-videos show representative sweep points. Small foreground and centroid errors despite
-large discarded latent energy support a nuisance-subspace interpretation. If those
-physical proxies degrade rapidly, the discarded components contain actual trajectory
-signal. Full rank and full bandwidth are included automatically as identity controls.
-
 ## Data-consistency sampler
 
 The observed low-rate frames define a temporal masking operator. At every reverse step, the sampler:
