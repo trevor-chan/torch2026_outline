@@ -38,8 +38,13 @@ def create_workdir(
     *,
     run_name: str | None = None,
     workdir: str | os.PathLike[str] | None = None,
+    subdirectories: tuple[str, ...] = RUN_SUBDIRECTORIES,
 ) -> Path:
-    """Create a fresh run directory without reusing an existing path."""
+    """Create a fresh run directory without reusing an existing path.
+
+    ``subdirectories`` defaults to the training layout; scene fits pass their
+    own so a fit directory does not sprout empty checkpoint and EMA folders.
+    """
     if workdir is not None:
         candidate = Path(workdir).expanduser()
         try:
@@ -62,7 +67,7 @@ def create_workdir(
                 candidate = root / f"{base_name}-{suffix:02d}"
                 suffix += 1
 
-    for relative_path in RUN_SUBDIRECTORIES:
+    for relative_path in subdirectories:
         (candidate / relative_path).mkdir(parents=True, exist_ok=True)
     return candidate.resolve()
 

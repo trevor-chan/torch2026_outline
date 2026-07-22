@@ -10,9 +10,9 @@ from collections.abc import Sequence
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m flow_interpolation",
-        description="Train flow-matching models and evaluate sparse interpolation methods.",
+        description="Train flow-matching models and fit implicit scenes to sparse k-space.",
     )
-    parser.add_argument("command", nargs="?", choices=("train", "eval"))
+    parser.add_argument("command", nargs="?", choices=("train", "fit"))
     return parser
 
 
@@ -27,8 +27,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     command, *command_arguments = arguments
     if command == "train":
         from flow_interpolation.training.cli import main as command_main
-    elif command == "eval":
-        from flow_interpolation.evaluation.cli import main as command_main
+    elif command == "fit":
+        from flow_interpolation.scene.cli import main as command_main
     else:
         parser.error(f"unknown command: {command}")
 

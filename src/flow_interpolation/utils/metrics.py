@@ -1,4 +1,4 @@
-"""Metrics and result serialization shared by evaluation experiments."""
+"""Metrics and result serialization shared by experiments."""
 
 from __future__ import annotations
 
@@ -23,44 +23,15 @@ def image_metrics(prediction: torch.Tensor, target: torch.Tensor) -> dict[str, f
     return {"mae": mae, "mse": mse, "rmse": rmse, "psnr_db": psnr}
 
 
-def tensor_metrics(prediction: torch.Tensor, target: torch.Tensor) -> dict[str, float]:
-    prediction = prediction.float()
-    target = target.float()
-    pred_flat = prediction.flatten(start_dim=1)
-    target_flat = target.flatten(start_dim=1)
-    diff = pred_flat - target_flat
-    target_norm = target_flat.norm(dim=1).clamp_min(1e-12)
-    pred_norm = pred_flat.norm(dim=1).clamp_min(1e-12)
-    relative_l2 = diff.norm(dim=1) / target_norm
-    cosine = torch.nn.functional.cosine_similarity(pred_flat, target_flat, dim=1).clamp(-1.0, 1.0)
-    angle_deg = torch.rad2deg(torch.acos(cosine))
-    radius_relative_error = (pred_norm - target_norm).abs() / target_norm
+def complex_metrics(prediction: torch.Tensor, target: torch.Tensor) -> dict[str, float]:
+    """Residual statistics for complex k-space tensors."""
+    error = (prediction - target).abs()
+    target_energy = target.abs().square().sum().clamp_min(1e-12)
     return {
-        **image_metrics(prediction, target),
-        "relative_l2": relative_l2.mean().item(),
-        "cosine_similarity": cosine.mean().item(),
-        "angle_degrees": angle_deg.mean().item(),
-        "radius_relative_error": radius_relative_error.mean().item(),
+        "kspace_mae": error.mean().item(),
+        "kspace_mse": error.square().mean().item(),
+        "kspace_relative_l2": (error.square().sum() / target_energy).sqrt().item(),
     }
-
-
-def print_noise_stats(name: str, noise: torch.Tensor) -> dict[str, float]:
-    flat = noise.float().flatten(start_dim=1)
-    expected_radius = math.sqrt(flat.shape[1])
-    radii = flat.norm(dim=1)
-    stats = {
-        "mean": flat.mean().item(),
-        "std": flat.std().item(),
-        "radius_mean": radii.mean().item(),
-        "radius_std": radii.std(unbiased=False).item(),
-        "sqrt_dimension": expected_radius,
-    }
-    print(
-        f"{name}: mean={stats['mean']:.4f}, std={stats['std']:.4f}, "
-        f"radius={stats['radius_mean']:.2f} +/- {stats['radius_std']:.2f} "
-        f"(sqrt(dim)={expected_radius:.2f})"
-    )
-    return stats
 
 
 def serializable(value: Any) -> Any:
