@@ -108,12 +108,46 @@ map.
 ### Measurement simulation
 
 `--sampling-rate` sets the per-frame fraction of the k-space grid retained.
-`--mask-family` chooses among `uniform`, `variable-density` (default),
-`cartesian` line sampling, and `radial` golden-angle spokes. Masks are drawn
-independently per frame, so the union over a temporal window covers far more of
-k-space than any single frame — the property progressive binning exploits.
 `--center-fraction` forces a fully sampled block around DC, and `--noise-std`
-adds complex measurement noise.
+adds complex measurement noise. `--mask-family` picks the sampling pattern:
+
+| Family | Pattern |
+|---|---|
+| `uniform` | Uniformly random points. |
+| `variable-density` | Density falls off as `(1 + r)^-decay` from DC. |
+| `poisson` | Radial density follows a Poisson pmf; a much harder center bias. |
+| `cartesian` | Fully sampled parallel lines (phase-encode undersampling). |
+| `radial` | Golden-angle spokes through DC. |
+| `without-replacement` | Points dealt across frames so coverage over time is even. |
+
+The first five are drawn independently per frame. `without-replacement` is
+generated at the sequence level instead: points are dealt from a shuffled pool,
+so every frame still gets the same number of samples but no frequency repeats
+until all the others have been used.
+
+That distinction matters because independent draws waste samples. By the
+coupon-collector argument, a window of `1 / sampling_rate` independent frames
+covers only about `1 - 1/e` of k-space; the same window of dealt frames covers
+all of it. Measured over 60 frames at a 10% rate:
+
+| Family | Mean radius | Window coverage, half-width 0 / 2 / 5 / 10 |
+|---|---|---|
+| `uniform` | 0.749 | 0.100 / 0.402 / 0.670 / 0.865 |
+| `variable-density` | 0.599 | 0.100 / 0.383 / 0.620 / 0.801 |
+| `poisson` | 0.362 | 0.100 / 0.252 / 0.339 / 0.412 |
+| `without-replacement` | 0.749 | 0.100 / 0.472 / 0.866 / **1.000** |
+
+`without-replacement` has per-frame statistics identical to `uniform` and
+differs only in how the samples are distributed over time, which makes the pair
+a clean A/B on temporal sampling structure alone. Its `decay` biases the *order*
+of the deal toward low frequencies without weakening the full-cycle coverage
+guarantee, since every point is still dealt exactly once per cycle.
+
+`poisson` trades the opposite way: its window coverage saturates low because it
+keeps resampling the center, but the frequencies it does sample carry most of
+the energy. Its `lam` sets where the density peaks — the Poisson pmf is
+maximized at `k = floor(lam)`, so `lam <= 1` (the default) decays monotonically
+from DC, and larger values deliberately peak on an annulus instead.
 
 ### Scene models
 

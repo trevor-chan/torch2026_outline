@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from flow_interpolation.data import BouncingBallVideoDataset
 from flow_interpolation.kspace import (
-    MASK_FAMILIES,
+    MASK_FAMILY_NAMES,
     build_dynamic_kspace,
     temporal_average_reconstruction,
     zero_filled_reconstruction,
@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     data.add_argument("--num-frames", type=int, default=200, help="dense frames to simulate")
     data.add_argument("--image-size", type=int, default=32)
     data.add_argument("--sampling-rate", type=float, default=0.1)
-    data.add_argument("--mask-family", choices=sorted(MASK_FAMILIES), default="variable-density")
+    data.add_argument("--mask-family", choices=MASK_FAMILY_NAMES, default="variable-density")
     data.add_argument(
         "--center-fraction",
         type=float,

@@ -62,8 +62,19 @@ resolution. It should be compared against the two static baselines:
 | `curriculum` | annealed wide -> narrow | Hypothesis: geometry from the wide phase survives the anneal, giving both sharp space and sharp time. |
 
 Secondary axes once the main comparison is settled: sampling rate (5/10/25% per
-frame), mask family (uniform random vs. variable-density vs. Cartesian lines vs.
-radial spokes), and scene-model family.
+frame), mask family, and scene-model family.
+
+The mask families split into two groups that interact with binning differently.
+Independent per-frame draws (uniform, variable-density, Poisson, Cartesian,
+radial) grow their window coverage only in expectation, and waste samples on
+frequencies the window already holds. Sequence-level dealing
+(`without-replacement`) coordinates across frames so a window of
+`1 / sampling_rate` frames covers k-space exactly, rather than the
+`1 - 1/e` a coupon-collector argument gives for independent draws. If the
+binning curriculum is doing its work by buying coverage, dealing should let the
+bin narrow further before the reconstruction degrades — and `uniform` vs.
+`without-replacement` isolates that, since they have identical per-frame
+statistics and differ only in temporal structure.
 
 ## Data (initial experiment)
 
